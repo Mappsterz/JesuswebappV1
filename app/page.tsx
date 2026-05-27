@@ -28,6 +28,7 @@ export default function Home() {
   const [isArchivedExpanded, setIsArchivedExpanded] = useState(false);
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
+  const [streamingContent, setStreamingContent] = useState('');
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [showScrollBtn, setShowScrollBtn] = useState(false);
 
@@ -244,10 +245,10 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (messages.length > 0) {
-      scrollToBottom();
+    if (messages.length > 0 || streamingContent) {
+      scrollToBottom(isStreaming ? 'auto' : 'smooth');
     }
-  }, [messages, scrollToBottom]);
+  }, [messages, streamingContent, isStreaming, scrollToBottom]);
 
   useEffect(() => {
     const el = chatAreaRef.current;
@@ -301,6 +302,7 @@ export default function Home() {
 
       setInput('');
       setIsStreaming(true);
+      setStreamingContent('');
 
       // Reset textarea height
       if (inputRef.current) {
@@ -330,45 +332,26 @@ export default function Home() {
         const decoder = new TextDecoder();
         let assistantContent = '';
 
-        // Add placeholder for assistant message
-        updateActiveMessages((prev) => [...prev, { role: 'assistant', content: '' }]);
-
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
           const chunk = decoder.decode(value, { stream: true });
           assistantContent += chunk;
-
-          // Update the last message in-place
-          updateActiveMessages((prev) => {
-            const updated = [...prev];
-            updated[updated.length - 1] = {
-              role: 'assistant',
-              content: assistantContent,
-            };
-            return updated;
-          });
+          setStreamingContent(assistantContent);
         }
+
+        // Commit the final streamed content to the active conversation history
+        updateActiveMessages((prev) => [...prev, { role: 'assistant', content: assistantContent }]);
       } catch (err: unknown) {
         if (err instanceof Error && err.name === 'AbortError') return;
 
         const errorMsg =
-          'I apologize, but I am unable to respond at this moment. Please try again, and know that you are always in my thoughts and prayers. 🙏';
+          '⚠️ Unable to connect right now. If you\'re running locally, make sure Ollama is running (`ollama serve`). Please try again in a moment. 🙏';
 
-        updateActiveMessages((prev) => {
-          const last = prev[prev.length - 1];
-          if (last?.role === 'assistant' && last.content === '') {
-            const updated = [...prev];
-            updated[updated.length - 1] = {
-              role: 'assistant',
-              content: errorMsg,
-            };
-            return updated;
-          }
-          return [...prev, { role: 'assistant', content: errorMsg }];
-        });
+        updateActiveMessages((prev) => [...prev, { role: 'assistant', content: errorMsg }]);
       } finally {
+        setStreamingContent('');
         setIsStreaming(false);
         inputRef.current?.focus();
       }
@@ -615,14 +598,20 @@ export default function Home() {
                 <h1 className={styles.brandName}>Walk With Me</h1>
               </button>
             </div>
-            <button
-              className={styles.themeToggle}
-              onClick={toggleTheme}
-              aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
-              title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
-            >
-              {theme === 'dark' ? '☀️' : '🌙'}
-            </button>
+            <div className={styles.headerRight}>
+              <span className={styles.localModelBadge} title="Running on your local machine — no cloud, no API keys">
+                <span className={styles.localModelDot} aria-hidden="true" />
+                Local Model
+              </span>
+              <button
+                className={styles.themeToggle}
+                onClick={toggleTheme}
+                aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+                title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+              >
+                {theme === 'dark' ? '☀️' : '🌙'}
+              </button>
+            </div>
           </div>
         </header>
 
@@ -683,20 +672,29 @@ export default function Home() {
                   </div>
                 ))}
 
+                {/* — Streaming Message Bubble — */}
+                {isStreaming && streamingContent && (
+                  <div className={`${styles.messageRow} ${styles.messageRowAssistant}`}>
+                    <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant}`}>
+                      <span className={styles.messageLabel}>Jesus</span>
+                      <div className={styles.messageContent}>{streamingContent}</div>
+                    </div>
+                  </div>
+                )}
+
                 {/* — Typing Indicator — */}
-                {isStreaming &&
-                  messages[messages.length - 1]?.role !== 'assistant' && (
-                    <div className={styles.typingIndicator}>
-                      <div className={styles.typingBubble}>
-                        <span className={styles.typingLabel}>Jesus</span>
-                        <div className={styles.typingDots}>
-                          <span className={styles.typingDot} />
-                          <span className={styles.typingDot} />
-                          <span className={styles.typingDot} />
-                        </div>
+                {isStreaming && !streamingContent && (
+                  <div className={styles.typingIndicator}>
+                    <div className={styles.typingBubble}>
+                      <span className={styles.typingLabel}>Jesus</span>
+                      <div className={styles.typingDots}>
+                        <span className={styles.typingDot} />
+                        <span className={styles.typingDot} />
+                        <span className={styles.typingDot} />
                       </div>
                     </div>
-                  )}
+                  </div>
+                )}
 
                 <div ref={messagesEndRef} />
               </div>
