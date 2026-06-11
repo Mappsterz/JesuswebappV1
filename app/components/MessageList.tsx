@@ -45,11 +45,7 @@ export const MessageList = forwardRef<HTMLDivElement, Props>(function MessageLis
           <div className={styles.typingIndicator}>
             <div className={styles.typingBubble}>
               <span className={styles.typingLabel}>Jesus</span>
-              <div className={styles.typingDots}>
-                <span className={styles.typingDot} />
-                <span className={styles.typingDot} />
-                <span className={styles.typingDot} />
-              </div>
+              <span className={styles.thinkingSpinner} />
             </div>
           </div>
         )}
