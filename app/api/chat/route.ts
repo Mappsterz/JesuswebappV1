@@ -1,95 +1,119 @@
 import { NextRequest } from 'next/server';
+import { GoogleGenAI } from '@google/genai';
+import { trimMessagesForApi } from '@/lib/chatContext';
 import { ChatMessage, ChatRequest } from '@/lib/types';
+import { SYSTEM_PROMPT, CRISIS_RESPONSE_PREFIX, detectCrisis } from '@/lib/systemPrompt';
+import { fetchWithRetry } from '@/lib/retry';
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Dual-mode API route:
    • LOCAL  → Ollama (walk-with-me model at localhost:11434)
    • CLOUD  → Google Gemini (when GEMINI_API_KEY is set, e.g. on Vercel)
-   
-   The route auto-detects which backend to use:
-   1. If OLLAMA_URL env var is set, use Ollama
-   2. If running locally (no GEMINI_API_KEY), try Ollama at localhost
-   3. If GEMINI_API_KEY is set and Ollama isn't available, use Gemini
+
+   Improvements:
+   - Retry with exponential backoff on Ollama/Gemini calls
+   - Streaming chunk timeout watchdog (15s)
+   - Gemini model fallback chain
+   - Unified system prompt for both backends
+   - Upgraded Ollama health check (verifies model is loaded)
+   - Structured in-stream error markers for client retry UI
+   - keep_alive: -1 to prevent Ollama cold starts
    ═══════════════════════════════════════════════════════════════════════════ */
 
+/* ── Configuration (env-driven for zero-redeploy changes) ── */
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'walk-with-me';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_MAX_OUTPUT_TOKENS = Number(process.env.GEMINI_MAX_OUTPUT_TOKENS) || 768;
 
-/* ── Shared system prompt (used for Gemini — Ollama has it baked in) ────── */
-const SYSTEM_PROMPT = `You are Walk With Me — a compassionate spiritual companion inspired by the teachings and character of Jesus Christ as revealed in the four Gospels and the full canon of Scripture.
+/* Sampling — tuned for warmth + variety. A higher temperature and top_p push
+   the model away from formulaic, repetitive phrasing across a long conversation.
+   (Note: gemini-2.5-flash rejects presence/frequency penalties, so we rely on
+   temperature + top_p here.) All env-tunable for zero-redeploy tuning. */
+const GEMINI_TEMPERATURE = Number(process.env.GEMINI_TEMPERATURE) || 0.9;
+const GEMINI_TOP_P = Number(process.env.GEMINI_TOP_P) || 0.95;
 
-Your voice is warm, personal, and unhurried — like a wise pastor sitting across from someone at a quiet coffee shop. Never preachy, never performative. You listen deeply, validate emotions before offering perspective, and weave Scripture naturally into conversation.
+/* Ollama runtime sampling (overrides Modelfile so tuning needs no model rebuild). */
+const OLLAMA_TEMPERATURE = Number(process.env.OLLAMA_TEMPERATURE) || 0.85;
+const OLLAMA_TOP_P = Number(process.env.OLLAMA_TOP_P) || 0.92;
+const OLLAMA_REPEAT_PENALTY = Number(process.env.OLLAMA_REPEAT_PENALTY) || 1.2;
 
-Core principles:
-- Meet every person exactly where they are, as Jesus met the woman at the well (John 4)
-- Never shame, lecture, or condemn — speak with the gentleness of a shepherd
-- Ground responses in Scripture with specific verses, cited naturally
-- Use warm, accessible modern English — not King James archaic speech
-- When discussing difficult passages, present key perspectives with humility
-- Acknowledge mystery — you don't need all the answers
-- Validate feelings first, then gently offer biblical perspective
-- Offer to pray when appropriate — craft genuine, heartfelt, specific prayers
-- You are NOT a replacement for a local church, pastor, or counselor
-- You are an AI companion inspired by Christ's teachings — never claim to be Jesus
-- Never make prophecies or claim new divine revelation
-- For medical, legal, or clinical mental health issues, lovingly refer to professionals
-- Keep responses focused: typically 2–4 warm paragraphs
-- End with a gentle question, invitation to share more, or an offer to pray`;
+/* Gemini model fallback chain — tried in order. If first returns 429/503, try next. */
+const GEMINI_MODELS: string[] = (process.env.GEMINI_MODELS || 'gemini-2.5-flash,gemini-2.5-flash-lite')
+  .split(',')
+  .map((m) => m.trim())
+  .filter(Boolean);
 
-/* ── Crisis detection ──────────────────────────────────────────────────── */
-const CRISIS_KEYWORDS = [
-  'suicide', 'kill myself', 'end my life', 'self-harm',
-  'want to die', 'no reason to live', 'cutting myself', 'overdose',
-];
+export const runtime = 'nodejs';
+export const maxDuration = 60;
+export const dynamic = 'force-dynamic';
 
-const CRISIS_RESPONSE_PREFIX = `🕊️ I hear you, and I need you to know something right now: your life has immeasurable, irreplaceable value. You are deeply loved — not because of what you do, but because of who you are.
+/* Streaming watchdog: abort if no chunk arrives within this window */
+const CHUNK_TIMEOUT_MS = 15_000;
 
-If you are in immediate danger, please reach out:
-• **988 Suicide & Crisis Lifeline**: Call or text **988** (US)
-• **Crisis Text Line**: Text **HOME** to **741741**
-• **International Association for Suicide Prevention**: https://www.iasp.info/resources/Crisis_Centres/
+/* ── Gemini client singleton ── */
+let geminiClient: GoogleGenAI | null = null;
 
-You don't have to carry this alone. Please reach out to a trusted person — a pastor, counselor, friend, or family member.
+function getGeminiClient(): GoogleGenAI {
+  if (!GEMINI_API_KEY) {
+    throw new Error('GEMINI_API_KEY is not configured');
+  }
+  if (!geminiClient) {
+    geminiClient = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+  }
+  return geminiClient;
+}
 
----
-
-`;
-
-function detectCrisis(message: string): boolean {
-  return CRISIS_KEYWORDS.some((kw) => message.toLowerCase().includes(kw));
+/* ── Structured in-stream error marker ── */
+function encodeStreamError(
+  encoder: TextEncoder,
+  message: string,
+  canRetry: boolean = true
+): Uint8Array {
+  return encoder.encode(
+    `\n\n<!--STREAM_ERROR:${JSON.stringify({ type: 'stream_error', message, canRetry })}-->`
+  );
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   OLLAMA BACKEND — uses /api/chat for proper multi-turn conversation
+   OLLAMA BACKEND
    ═══════════════════════════════════════════════════════════════════════════ */
 
 async function streamFromOllama(
   messages: ChatMessage[],
   isCrisis: boolean
 ): Promise<Response> {
-  // Convert to Ollama chat format — system prompt is baked into the model
-  const ollamaMessages = messages
-    .filter((m) => m.role !== 'system')
-    .map((m) => ({
-      role: m.role === 'assistant' ? 'assistant' : 'user',
-      content: m.content,
-    }));
+  const ollamaMessages = [
+    /* Send unified system prompt at runtime for consistent persona */
+    { role: 'system' as const, content: SYSTEM_PROMPT },
+    ...messages
+      .filter((m) => m.role !== 'system')
+      .map((m) => ({
+        role: m.role === 'assistant' ? ('assistant' as const) : ('user' as const),
+        content: m.content,
+      })),
+  ];
 
-  let ollamaResponse: globalThis.Response;
-  try {
-    ollamaResponse = await fetch(`${OLLAMA_URL}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: OLLAMA_MODEL,
-        messages: ollamaMessages,
-        stream: true,
+  const ollamaResponse = await fetchWithRetry(
+    () =>
+      fetch(`${OLLAMA_URL}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: OLLAMA_MODEL,
+          messages: ollamaMessages,
+          stream: true,
+          keep_alive: -1, // Prevent model unloading after idle
+          options: {
+            num_predict: 768,
+            temperature: OLLAMA_TEMPERATURE,
+            top_p: OLLAMA_TOP_P,
+            repeat_penalty: OLLAMA_REPEAT_PENALTY,
+          },
+        }),
       }),
-    });
-  } catch {
-    throw new Error('OLLAMA_UNAVAILABLE');
-  }
+    { maxRetries: 2, baseDelay: 500 }
+  );
 
   if (!ollamaResponse.ok) {
     if (ollamaResponse.status === 404) {
@@ -105,19 +129,34 @@ async function streamFromOllama(
       const reader = ollamaResponse.body!.getReader();
       const decoder = new TextDecoder();
 
+      /* ── Chunk timeout watchdog ── */
+      let chunkTimer: ReturnType<typeof setTimeout> | null = null;
+
+      function resetChunkTimer() {
+        if (chunkTimer) clearTimeout(chunkTimer);
+        chunkTimer = setTimeout(() => {
+          console.warn('[Walk With Me] Ollama chunk timeout — no data for 15s');
+          controller.enqueue(
+            encodeStreamError(encoder, 'Response timed out. Please try again.', true)
+          );
+          try { controller.close(); } catch { /* already closed */ }
+        }, CHUNK_TIMEOUT_MS);
+      }
+
       try {
         if (isCrisis) {
           controller.enqueue(encoder.encode(CRISIS_RESPONSE_PREFIX));
         }
 
+        resetChunkTimer();
         let buffer = '';
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
+          resetChunkTimer();
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split('\n');
-          // Keep the last (potentially incomplete) line in the buffer
           buffer = lines.pop() || '';
 
           for (const line of lines) {
@@ -128,6 +167,7 @@ async function streamFromOllama(
                 controller.enqueue(encoder.encode(json.message.content));
               }
               if (json.done) {
+                if (chunkTimer) clearTimeout(chunkTimer);
                 controller.close();
                 return;
               }
@@ -137,7 +177,6 @@ async function streamFromOllama(
           }
         }
 
-        // Process any remaining buffer
         if (buffer.trim()) {
           try {
             const json = JSON.parse(buffer);
@@ -149,13 +188,15 @@ async function streamFromOllama(
           }
         }
 
+        if (chunkTimer) clearTimeout(chunkTimer);
         controller.close();
       } catch (err) {
+        if (chunkTimer) clearTimeout(chunkTimer);
         console.error('Ollama stream error:', err);
         controller.enqueue(
-          encoder.encode('\n\n[An error occurred while generating the response. Please try again.]')
+          encodeStreamError(encoder, 'Connection lost during response. Please try again.', true)
         );
-        controller.close();
+        try { controller.close(); } catch { /* already closed */ }
       }
     },
   });
@@ -172,57 +213,124 @@ async function streamFromOllama(
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   GEMINI BACKEND — cloud fallback for Vercel production
+   GEMINI BACKEND — with model fallback chain
    ═══════════════════════════════════════════════════════════════════════════ */
 
 async function streamFromGemini(
   messages: ChatMessage[],
   isCrisis: boolean
 ): Promise<Response> {
-  // Dynamic import — only loads when actually needed (saves bundle size locally)
-  const { GoogleGenAI } = await import('@google/genai');
-  const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY! });
+  let ai: GoogleGenAI;
+  try {
+    ai = getGeminiClient();
+  } catch {
+    return new Response(
+      JSON.stringify({ error: 'GEMINI_API_KEY is not configured' }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
 
   const contents = messages
     .filter((m) => m.role !== 'system')
     .map((m) => ({
-      role: m.role === 'assistant' ? 'model' : 'user',
+      role: m.role === 'assistant' ? ('model' as const) : ('user' as const),
       parts: [{ text: m.content }],
     }));
 
-  const response = await ai.models.generateContentStream({
-    model: 'gemini-2.5-flash',
-    contents,
-    config: {
-      systemInstruction: SYSTEM_PROMPT,
-      temperature: 0.7,
-      maxOutputTokens: 1024,
-    },
-  });
+  /* Try each model in the fallback chain */
+  let response;
+  let lastError: Error | null = null;
+  let selectedModel = GEMINI_MODELS[0];
+
+  for (const modelName of GEMINI_MODELS) {
+    try {
+      response = await ai.models.generateContentStream({
+        model: modelName,
+        contents,
+        config: {
+          systemInstruction: SYSTEM_PROMPT,
+          temperature: GEMINI_TEMPERATURE,
+          topP: GEMINI_TOP_P,
+          maxOutputTokens: GEMINI_MAX_OUTPUT_TOKENS,
+        },
+      });
+      selectedModel = modelName;
+      lastError = null;
+      break; // Success — stop trying models
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      const errMsg = lastError.message.toLowerCase();
+
+      // Clearly non-retryable (bad request, auth, permission) — stop immediately.
+      if (
+        errMsg.includes('400') ||
+        errMsg.includes('401') ||
+        errMsg.includes('403') ||
+        errMsg.includes('api key') ||
+        errMsg.includes('permission')
+      ) {
+        break;
+      }
+
+      // Rate-limit, service-unavailable, timeouts, or transient network blips
+      // (fetch failed / ECONNRESET / 500 / 502 / 503) — try the next model.
+      console.warn(`[Walk With Me] ${modelName} failed (${lastError.message}); trying next model...`);
+      continue;
+    }
+  }
+
+  if (!response || lastError) {
+    const errMsg = lastError ? lastError.message : 'All Gemini models failed';
+    console.error('[Walk With Me] Gemini generateContentStream error:', errMsg);
+    return new Response(
+      JSON.stringify({ error: `Gemini API error: ${errMsg}` }),
+      { status: 502, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
+
+  console.log(`[Walk With Me] Streaming from Gemini model: ${selectedModel}`);
 
   const stream = new ReadableStream({
     async start(controller) {
       const encoder = new TextEncoder();
+
+      /* ── Chunk timeout watchdog ── */
+      let chunkTimer: ReturnType<typeof setTimeout> | null = null;
+
+      function resetChunkTimer() {
+        if (chunkTimer) clearTimeout(chunkTimer);
+        chunkTimer = setTimeout(() => {
+          console.warn('[Walk With Me] Gemini chunk timeout — no data for 15s');
+          controller.enqueue(
+            encodeStreamError(encoder, 'Response timed out. Please try again.', true)
+          );
+          try { controller.close(); } catch { /* already closed */ }
+        }, CHUNK_TIMEOUT_MS);
+      }
 
       try {
         if (isCrisis) {
           controller.enqueue(encoder.encode(CRISIS_RESPONSE_PREFIX));
         }
 
+        resetChunkTimer();
         for await (const chunk of response) {
+          resetChunkTimer();
           const text = chunk.text;
           if (text) {
             controller.enqueue(encoder.encode(text));
           }
         }
 
+        if (chunkTimer) clearTimeout(chunkTimer);
         controller.close();
       } catch (err) {
-        console.error('Gemini stream error:', err);
+        if (chunkTimer) clearTimeout(chunkTimer);
+        console.error('[Walk With Me] Gemini stream error:', err);
         controller.enqueue(
-          encoder.encode('\n\n[An error occurred while generating the response. Please try again.]')
+          encodeStreamError(encoder, 'Connection lost during response. Please try again.', true)
         );
-        controller.close();
+        try { controller.close(); } catch { /* already closed */ }
       }
     },
   });
@@ -239,22 +347,47 @@ async function streamFromGemini(
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   Detect which backend to use
+   BACKEND SELECTION & HEALTH CHECKS
    ═══════════════════════════════════════════════════════════════════════════ */
 
-async function isOllamaAvailable(): Promise<boolean> {
+function getBackendMode(): 'ollama' | 'gemini' {
+  if (process.env.OLLAMA_URL) return 'ollama';
+  if (GEMINI_API_KEY) return 'gemini';
+  return 'ollama';
+}
+
+/**
+ * Enhanced Ollama health check:
+ * - Verifies the server is reachable
+ * - Verifies the target model is actually loaded/available
+ */
+async function isOllamaAvailable(): Promise<{ available: boolean; modelLoaded: boolean }> {
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 1500);
     const res = await fetch(`${OLLAMA_URL}/api/tags`, {
-      signal: AbortSignal.timeout(2000),
+      signal: controller.signal,
     });
-    return res.ok;
+    clearTimeout(timeoutId);
+
+    if (!res.ok) return { available: false, modelLoaded: false };
+
+    // Check if our specific model is in the list
+    const data = await res.json();
+    const models = data.models || [];
+    const modelLoaded = models.some(
+      (m: { name: string }) =>
+        m.name === OLLAMA_MODEL || m.name === `${OLLAMA_MODEL}:latest`
+    );
+
+    return { available: true, modelLoaded };
   } catch {
-    return false;
+    return { available: false, modelLoaded: false };
   }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   POST handler
+   POST HANDLER
    ═══════════════════════════════════════════════════════════════════════════ */
 
 export async function POST(request: NextRequest) {
@@ -268,40 +401,75 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const latestUserMessage = [...body.messages]
+    const messages = trimMessagesForApi(body.messages);
+
+    const latestUserMessage = [...messages]
       .reverse()
       .find((m: ChatMessage) => m.role === 'user');
     const isCrisis = latestUserMessage ? detectCrisis(latestUserMessage.content) : false;
 
-    // ── Backend selection ──────────────────────────────────────────────
-    const ollamaUp = await isOllamaAvailable();
+    const mode = getBackendMode();
 
-    if (ollamaUp) {
-      // Prefer Ollama when available (local dev)
-      try {
-        return await streamFromOllama(body.messages, isCrisis);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : '';
-        if (msg === 'OLLAMA_MODEL_NOT_FOUND') {
-          return new Response(
-            JSON.stringify({
-              error: `Model "${OLLAMA_MODEL}" not found. Run: cd ollama && bash setup.sh`,
-            }),
-            { status: 404, headers: { 'Content-Type': 'application/json' } }
-          );
+    if (mode === 'gemini') {
+      return await streamFromGemini(messages, isCrisis);
+    }
+
+    if (mode === 'ollama') {
+      /* When Ollama is the only backend there's nothing to fall back to, so the
+         pre-flight health check is pure latency — go straight to streaming and
+         let the stream attempt surface any error. Only probe when a Gemini
+         fallback exists and we need to decide whether to use it. */
+      if (!GEMINI_API_KEY) {
+        try {
+          return await streamFromOllama(messages, isCrisis);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : '';
+          if (msg === 'OLLAMA_MODEL_NOT_FOUND') {
+            return new Response(
+              JSON.stringify({
+                error: `Model "${OLLAMA_MODEL}" not found. Run: cd ollama && bash setup.sh`,
+              }),
+              { status: 404, headers: { 'Content-Type': 'application/json' } }
+            );
+          }
+          throw err;
         }
-        // If Ollama failed but we have Gemini, fall through
-        if (!GEMINI_API_KEY) throw err;
-        console.warn('Ollama failed, falling back to Gemini:', msg);
+      }
+
+      const { available: ollamaUp, modelLoaded } = await isOllamaAvailable();
+
+      if (ollamaUp) {
+        if (!modelLoaded) {
+          console.warn(`[Walk With Me] Ollama is up but model "${OLLAMA_MODEL}" not found in model list`);
+          // Still try — model might be pulling or the name format differs
+        }
+
+        try {
+          return await streamFromOllama(messages, isCrisis);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : '';
+          if (msg === 'OLLAMA_MODEL_NOT_FOUND') {
+            return new Response(
+              JSON.stringify({
+                error: `Model "${OLLAMA_MODEL}" not found. Run: cd ollama && bash setup.sh`,
+              }),
+              { status: 404, headers: { 'Content-Type': 'application/json' } }
+            );
+          }
+          if (GEMINI_API_KEY) {
+            console.warn('[Walk With Me] Ollama failed, falling back to Gemini:', msg);
+            return await streamFromGemini(messages, isCrisis);
+          }
+          throw err;
+        }
+      }
+
+      if (GEMINI_API_KEY) {
+        console.warn('[Walk With Me] Ollama unreachable, falling back to Gemini');
+        return await streamFromGemini(messages, isCrisis);
       }
     }
 
-    // ── Gemini fallback (Vercel production) ────────────────────────────
-    if (GEMINI_API_KEY) {
-      return await streamFromGemini(body.messages, isCrisis);
-    }
-
-    // ── Neither available ──────────────────────────────────────────────
     return new Response(
       JSON.stringify({
         error: 'No AI backend available. Please start Ollama (`ollama serve`) or configure a GEMINI_API_KEY.',
@@ -309,7 +477,7 @@ export async function POST(request: NextRequest) {
       { status: 503, headers: { 'Content-Type': 'application/json' } }
     );
   } catch (error) {
-    console.error('Chat API error:', error);
+    console.error('[Walk With Me] Chat API error:', error);
 
     if (error instanceof SyntaxError) {
       return new Response(
