@@ -720,6 +720,8 @@
 .mdTextField:focus-within {
   box-shadow: var(--md-elevation-floating-focus);
   transform: translateY(-1px);
+  outline: 2px solid var(--accent-gold);
+  outline-offset: 2px;
 }
 
 .mdTextField:focus-within::before {
@@ -770,6 +772,12 @@
 
 .mdInput::placeholder {
   color: transparent;
+}
+
+/* The container shows the focus ring (see .mdTextField:focus-within) so the
+   ring wraps the floating label instead of striking through it. */
+.mdInput:focus-visible {
+  outline: none;
 }
 
 .mdFab {
