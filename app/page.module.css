@@ -637,17 +637,28 @@
 }
 
 .thinkingSpinner {
-  width: 16px;
-  height: 16px;
+  display: inline-block;
+  width: 18px;
+  height: 18px;
   border-radius: var(--radius-full);
-  border: 2px solid color-mix(in srgb, var(--accent-gold) 25%, transparent);
-  border-top-color: var(--accent-gold);
-  animation: thinkingSpin 0.9s linear infinite;
+  background: conic-gradient(from 0deg, transparent 8%, var(--accent-gold));
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+  animation: thinkingSpin 1s linear infinite;
 }
 
 @keyframes thinkingSpin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+/* Loading feedback is essential motion — keep a slow, gentle spin even when
+   the global reduced-motion rule freezes decorative animations. */
+@media (prefers-reduced-motion: reduce) {
+  .thinkingSpinner {
+    animation-duration: 2.4s !important;
+    animation-iteration-count: infinite !important;
   }
 }
 
