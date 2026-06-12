@@ -26,6 +26,8 @@ export default function Home() {
     activeId,
     setActiveId,
     messages,
+    ensureActiveId,
+    updateMessagesFor,
     updateActiveMessages,
     newWalk,
     renameWalk,
@@ -62,7 +64,8 @@ export default function Home() {
 
   const { isStreaming, streamingContent, connectionHealth, lastError, sendMessage, regenerate, retry, stop } = useChatStream({
     activeId,
-    updateActiveMessages,
+    ensureActiveId,
+    updateMessagesFor,
     titleFromFirstMessage,
     onSettled: focusInput,
   });

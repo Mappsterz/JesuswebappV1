@@ -22,28 +22,37 @@ export function useConversations() {
   const [activeId, setActiveId] = useState<string | null>(null);
 
   /* Load on mount. localStorage is only readable after hydration, so the
-     initial state sync necessarily happens in this effect. */
+     initial state sync necessarily happens in this effect.
+     Functional updates so a send that raced ahead of this effect (creating a
+     conversation via ensureActiveId) is never clobbered by the loaded state,
+     and every path — including corrupted storage — ends with a usable
+     active conversation. */
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
+    let convos: Conversation[] = [];
+    let savedActiveId: string | null = null;
     try {
+      savedActiveId = localStorage.getItem(ACTIVE_KEY);
       const savedConvos = localStorage.getItem(CONVOS_KEY);
-      const savedActiveId = localStorage.getItem(ACTIVE_KEY);
-
-      let convos: Conversation[] = savedConvos ? JSON.parse(savedConvos) : [];
+      convos = savedConvos ? JSON.parse(savedConvos) : [];
       convos = convos.filter((c) => c.messages.length > 0 || c.id === savedActiveId);
+    } catch (e) {
+      console.error('[WWM] Failed to load conversations, starting fresh:', e);
+      convos = [];
+    }
 
+    setConversations((prev) => {
+      if (prev.length > 0) return prev; // a send already created one — keep it
       if (convos.length === 0) {
         const initial = createConversation();
-        setConversations([initial]);
-        setActiveId(initial.id);
-      } else {
-        setConversations(convos);
-        const activeExists = convos.some((c) => c.id === savedActiveId);
-        setActiveId(activeExists ? savedActiveId : (convos.find((c) => !c.isArchived) || convos[0]).id);
+        setActiveId((prevId) => prevId ?? initial.id);
+        return [initial];
       }
-    } catch (e) {
-      console.error('Failed to load conversations:', e);
-    }
+      const activeExists = convos.some((c) => c.id === savedActiveId);
+      const fallbackId = (convos.find((c) => !c.isArchived) || convos[0]).id;
+      setActiveId((prevId) => prevId ?? (activeExists ? savedActiveId : fallbackId));
+      return convos;
+    });
   }, []);
   /* eslint-enable react-hooks/set-state-in-effect */
 
@@ -65,12 +74,23 @@ export function useConversations() {
   );
   const messages = activeConversation ? activeConversation.messages : [];
 
-  const updateActiveMessages = useCallback(
-    (updater: Message[] | ((prev: Message[]) => Message[])) => {
-      if (!activeId) return;
+  /* Returns the active conversation id, creating one on the spot if none
+     exists yet — a send must never be dropped because state isn't ready. */
+  const ensureActiveId = useCallback((): string => {
+    if (activeId) return activeId;
+    const convo = createConversation();
+    setConversations((prev) => [convo, ...prev]);
+    setActiveId(convo.id);
+    return convo.id;
+  }, [activeId]);
+
+  /* Write messages to a specific conversation by id, so streamed replies land
+     in the conversation that started them even if the user switches away. */
+  const updateMessagesFor = useCallback(
+    (id: string, updater: Message[] | ((prev: Message[]) => Message[])) => {
       setConversations((prev) =>
         prev.map((c) =>
-          c.id === activeId
+          c.id === id
             ? {
                 ...c,
                 messages: typeof updater === 'function' ? updater(c.messages) : updater,
@@ -80,7 +100,15 @@ export function useConversations() {
         )
       );
     },
-    [activeId]
+    []
+  );
+
+  const updateActiveMessages = useCallback(
+    (updater: Message[] | ((prev: Message[]) => Message[])) => {
+      if (!activeId) return;
+      updateMessagesFor(activeId, updater);
+    },
+    [activeId, updateMessagesFor]
   );
 
   const newWalk = useCallback(() => {
@@ -188,6 +216,8 @@ export function useConversations() {
     setActiveId,
     activeConversation,
     messages,
+    ensureActiveId,
+    updateMessagesFor,
     updateActiveMessages,
     setConversations,
     newWalk,

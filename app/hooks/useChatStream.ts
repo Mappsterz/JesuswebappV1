@@ -38,12 +38,17 @@ type ConnectionHealth = 'connected' | 'error' | 'idle';
 
 type Options = {
   activeId: string | null;
-  updateActiveMessages: (updater: Message[] | ((prev: Message[]) => Message[])) => void;
+  /* Returns the active conversation id, creating one if state isn't ready —
+     a first prompt must never be silently dropped. */
+  ensureActiveId: () => string;
+  /* Writes are routed by conversation id so a streamed reply lands in the
+     conversation that started it, even if the user switches away mid-stream. */
+  updateMessagesFor: (id: string, updater: Message[] | ((prev: Message[]) => Message[])) => void;
   titleFromFirstMessage: (id: string, text: string) => void;
   onSettled?: () => void;
 };
 
-export function useChatStream({ activeId, updateActiveMessages, titleFromFirstMessage, onSettled }: Options) {
+export function useChatStream({ activeId, ensureActiveId, updateMessagesFor, titleFromFirstMessage, onSettled }: Options) {
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
   const [connectionHealth, setConnectionHealth] = useState<ConnectionHealth>('idle');
@@ -53,6 +58,7 @@ export function useChatStream({ activeId, updateActiveMessages, titleFromFirstMe
   const accumulatedRef = useRef('');
   const rafRef = useRef<number | null>(null);
   const lastMessagesRef = useRef<Message[]>([]);
+  const lastConvoIdRef = useRef<string | null>(null);
 
   /* ── Paced reveal ──
      Network chunks land in accumulatedRef in bursts; revealing them as they
@@ -135,18 +141,18 @@ export function useChatStream({ activeId, updateActiveMessages, titleFromFirstMe
   }, [revealTarget, scheduleFlush]);
 
   const commitAssistant = useCallback(
-    (content: string) => {
+    (content: string, convoId: string) => {
       const trimmed = content.trim();
       if (!trimmed) return;
       flushSync(() => {
-        updateActiveMessages((prev) => [...prev, { role: 'assistant', content }]);
+        updateMessagesFor(convoId, (prev) => [...prev, { role: 'assistant', content }]);
       });
     },
-    [updateActiveMessages]
+    [updateMessagesFor]
   );
 
   const runStream = useCallback(
-    async (messagesToSend: Message[]) => {
+    async (messagesToSend: Message[], convoId: string) => {
       setIsStreaming(true);
       setStreamingContent('');
       setLastError(null);
@@ -155,6 +161,7 @@ export function useChatStream({ activeId, updateActiveMessages, titleFromFirstMe
       revealedRef.current = 0;
       streamDoneRef.current = false;
       lastMessagesRef.current = messagesToSend;
+      lastConvoIdRef.current = convoId;
 
       abortRef.current?.abort();
       const controller = new AbortController();
@@ -169,6 +176,14 @@ export function useChatStream({ activeId, updateActiveMessages, titleFromFirstMe
         });
 
         if (!response.ok) {
+          let serverMessage = '';
+          try {
+            serverMessage = (await response.json())?.error || '';
+          } catch { /* non-JSON body */ }
+          console.error('[WWM] chat request failed', {
+            status: response.status,
+            serverMessage,
+          });
           setConnectionHealth('error');
           throw new Error(`Server error: ${response.status}`);
         }
@@ -193,29 +208,34 @@ export function useChatStream({ activeId, updateActiveMessages, titleFromFirstMe
         const { cleanContent, error } = extractStreamError(accumulatedRef.current);
 
         if (error) {
+          console.error('[WWM] in-stream error marker', { message: error.message, partialChars: cleanContent.length });
           setLastError(error);
           setConnectionHealth('error');
           if (cleanContent.trim()) {
-            commitAssistant(cleanContent);
+            commitAssistant(cleanContent, convoId);
           }
         } else {
           setConnectionHealth('idle');
-          commitAssistant(accumulatedRef.current);
+          commitAssistant(accumulatedRef.current, convoId);
         }
       } catch (err: unknown) {
         streamDoneRef.current = true;
         flushStreamingToState();
         if (err instanceof Error && err.name === 'AbortError') {
-          commitAssistant(accumulatedRef.current);
+          commitAssistant(accumulatedRef.current, convoId);
           setConnectionHealth('idle');
           return;
         }
+        console.error('[WWM] stream failed', {
+          error: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+          receivedChars: accumulatedRef.current.length,
+        });
         setConnectionHealth('error');
         if (accumulatedRef.current.trim()) {
           const { cleanContent } = extractStreamError(accumulatedRef.current);
-          commitAssistant(cleanContent || accumulatedRef.current);
+          commitAssistant(cleanContent || accumulatedRef.current, convoId);
         } else {
-          commitAssistant(CONNECTION_ERROR);
+          commitAssistant(CONNECTION_ERROR, convoId);
         }
       } finally {
         streamDoneRef.current = true;
@@ -238,15 +258,22 @@ export function useChatStream({ activeId, updateActiveMessages, titleFromFirstMe
   const sendMessage = useCallback(
     async (text: string, currentMessages: Message[]) => {
       const trimmed = text.trim();
-      if (!trimmed || isStreaming || !activeId) return;
+      if (!trimmed || isStreaming) return;
+
+      /* Never drop a send because conversation state isn't ready yet —
+         create the conversation on the spot if needed. */
+      const convoId = activeId ?? ensureActiveId();
+      if (!activeId) {
+        console.warn('[WWM] send arrived before conversations initialized — created one on the fly');
+      }
 
       const userMessage: Message = { role: 'user', content: trimmed };
-      titleFromFirstMessage(activeId, trimmed);
-      updateActiveMessages((prev) => [...prev, userMessage]);
+      titleFromFirstMessage(convoId, trimmed);
+      updateMessagesFor(convoId, (prev) => [...prev, userMessage]);
 
-      await runStream([...currentMessages, userMessage]);
+      await runStream([...currentMessages, userMessage], convoId);
     },
-    [activeId, isStreaming, runStream, titleFromFirstMessage, updateActiveMessages]
+    [activeId, ensureActiveId, isStreaming, runStream, titleFromFirstMessage, updateMessagesFor]
   );
 
   const regenerate = useCallback(
@@ -256,19 +283,19 @@ export function useChatStream({ activeId, updateActiveMessages, titleFromFirstMe
       if (lastUserIndex === -1) return;
 
       const trimmed = currentMessages.slice(0, lastUserIndex + 1);
-      updateActiveMessages(trimmed);
-      await runStream(trimmed);
+      updateMessagesFor(activeId, trimmed);
+      await runStream(trimmed, activeId);
     },
-    [activeId, isStreaming, runStream, updateActiveMessages]
+    [activeId, isStreaming, runStream, updateMessagesFor]
   );
 
   const retry = useCallback(
     async () => {
-      if (isStreaming || !activeId || lastMessagesRef.current.length === 0) return;
+      if (isStreaming || lastMessagesRef.current.length === 0 || !lastConvoIdRef.current) return;
       setLastError(null);
-      await runStream(lastMessagesRef.current);
+      await runStream(lastMessagesRef.current, lastConvoIdRef.current);
     },
-    [activeId, isStreaming, runStream]
+    [isStreaming, runStream]
   );
 
   const stop = useCallback(() => {

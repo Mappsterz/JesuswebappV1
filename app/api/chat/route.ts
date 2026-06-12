@@ -51,6 +51,12 @@ export const dynamic = 'force-dynamic';
 /* Streaming watchdog: abort if no chunk arrives within this window */
 const CHUNK_TIMEOUT_MS = 15_000;
 
+/* Cold-start observability: true only for the first request served by this
+   function instance. Lets logs distinguish "slow because cold" from "failed". */
+let isColdInstance = true;
+
+type RequestMeta = { requestStart: number; coldStart: boolean };
+
 /* ── Gemini client singleton ── */
 let geminiClient: GoogleGenAI | null = null;
 
@@ -81,7 +87,8 @@ function encodeStreamError(
 
 async function streamFromOllama(
   messages: ChatMessage[],
-  isCrisis: boolean
+  isCrisis: boolean,
+  meta: RequestMeta
 ): Promise<Response> {
   const ollamaMessages = [
     /* Send unified system prompt at runtime for consistent persona */
@@ -150,6 +157,7 @@ async function streamFromOllama(
 
         resetChunkTimer();
         let buffer = '';
+        let firstTokenLogged = false;
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -164,6 +172,15 @@ async function streamFromOllama(
             try {
               const json = JSON.parse(line);
               if (json.message?.content) {
+                if (!firstTokenLogged) {
+                  firstTokenLogged = true;
+                  console.log('[WWM] first token ' + JSON.stringify({
+                    backend: 'ollama',
+                    model: OLLAMA_MODEL,
+                    ttftMs: Date.now() - meta.requestStart,
+                    coldStart: meta.coldStart,
+                  }));
+                }
                 controller.enqueue(encoder.encode(json.message.content));
               }
               if (json.done) {
@@ -218,7 +235,8 @@ async function streamFromOllama(
 
 async function streamFromGemini(
   messages: ChatMessage[],
-  isCrisis: boolean
+  isCrisis: boolean,
+  meta: RequestMeta
 ): Promise<Response> {
   let ai: GoogleGenAI;
   try {
@@ -314,14 +332,33 @@ async function streamFromGemini(
         }
 
         resetChunkTimer();
+        let firstTokenLogged = false;
+        let totalChars = 0;
         for await (const chunk of response) {
           resetChunkTimer();
           const text = chunk.text;
           if (text) {
+            if (!firstTokenLogged) {
+              firstTokenLogged = true;
+              console.log('[WWM] first token ' + JSON.stringify({
+                backend: 'gemini',
+                model: selectedModel,
+                ttftMs: Date.now() - meta.requestStart,
+                coldStart: meta.coldStart,
+              }));
+            }
+            totalChars += text.length;
             controller.enqueue(encoder.encode(text));
           }
         }
 
+        console.log('[WWM] stream complete ' + JSON.stringify({
+          backend: 'gemini',
+          model: selectedModel,
+          totalChars,
+          durationMs: Date.now() - meta.requestStart,
+          coldStart: meta.coldStart,
+        }));
         if (chunkTimer) clearTimeout(chunkTimer);
         controller.close();
       } catch (err) {
@@ -391,6 +428,8 @@ async function isOllamaAvailable(): Promise<{ available: boolean; modelLoaded: b
    ═══════════════════════════════════════════════════════════════════════════ */
 
 export async function POST(request: NextRequest) {
+  const meta: RequestMeta = { requestStart: Date.now(), coldStart: isColdInstance };
+  isColdInstance = false;
   try {
     const body: ChatRequest = await request.json();
 
@@ -411,7 +450,7 @@ export async function POST(request: NextRequest) {
     const mode = getBackendMode();
 
     if (mode === 'gemini') {
-      return await streamFromGemini(messages, isCrisis);
+      return await streamFromGemini(messages, isCrisis, meta);
     }
 
     if (mode === 'ollama') {
@@ -421,7 +460,7 @@ export async function POST(request: NextRequest) {
          fallback exists and we need to decide whether to use it. */
       if (!GEMINI_API_KEY) {
         try {
-          return await streamFromOllama(messages, isCrisis);
+          return await streamFromOllama(messages, isCrisis, meta);
         } catch (err) {
           const msg = err instanceof Error ? err.message : '';
           if (msg === 'OLLAMA_MODEL_NOT_FOUND') {
@@ -445,7 +484,7 @@ export async function POST(request: NextRequest) {
         }
 
         try {
-          return await streamFromOllama(messages, isCrisis);
+          return await streamFromOllama(messages, isCrisis, meta);
         } catch (err) {
           const msg = err instanceof Error ? err.message : '';
           if (msg === 'OLLAMA_MODEL_NOT_FOUND') {
@@ -458,7 +497,7 @@ export async function POST(request: NextRequest) {
           }
           if (GEMINI_API_KEY) {
             console.warn('[Walk With Me] Ollama failed, falling back to Gemini:', msg);
-            return await streamFromGemini(messages, isCrisis);
+            return await streamFromGemini(messages, isCrisis, meta);
           }
           throw err;
         }
@@ -466,7 +505,7 @@ export async function POST(request: NextRequest) {
 
       if (GEMINI_API_KEY) {
         console.warn('[Walk With Me] Ollama unreachable, falling back to Gemini');
-        return await streamFromGemini(messages, isCrisis);
+        return await streamFromGemini(messages, isCrisis, meta);
       }
     }
 
