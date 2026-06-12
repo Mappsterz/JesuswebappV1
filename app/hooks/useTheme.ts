@@ -23,7 +23,17 @@ export function useTheme() {
     setTheme((prev) => {
       const next = prev === 'dark' ? 'light' : 'dark';
       localStorage.setItem(THEME_KEY, next);
-      document.documentElement.setAttribute('data-theme', next);
+
+      /* Crossfade the whole page between themes instead of swapping tokens
+         instantly. Same feature-detection idiom as chat switching in page.tsx. */
+      const apply = () => document.documentElement.setAttribute('data-theme', next);
+      const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (!reduceMotion && 'startViewTransition' in document) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (document as any).startViewTransition(apply);
+      } else {
+        apply();
+      }
       return next;
     });
   }, []);

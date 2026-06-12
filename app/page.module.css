@@ -2,6 +2,57 @@
    Walk With Me — Chat Page Styles
    =================================================== */
 
+/* ===================================================
+   Module-local keyframes
+   CSS Modules hashes every animation-name reference in this file, so
+   keyframes defined in globals.css can never be reached from here — the
+   hashed reference resolves to nothing and the animation silently no-ops.
+   Every keyframe this module uses must therefore be defined in this module.
+   =================================================== */
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+
+@keyframes breathe {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+/* Pair with --ease-spring(-soft); the curve supplies the bounce */
+@keyframes springUp {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes popIn {
+  from {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 /* — Page Container — */
 .pageWrapper {
   position: relative;
@@ -34,9 +85,11 @@
     rgba(212, 168, 83, 0.04) 0%,
     transparent 70%
   );
-  animation: float 20s ease-in-out infinite;
+  animation:
+    orbDriftA 26s ease-in-out infinite,
+    orbGlow 13s ease-in-out infinite;
   /* will-change removed — let browser auto-promote animated layers */
-  opacity: 0.03;
+  opacity: 0.04;
 }
 
 .ambientBackground::after {
@@ -52,9 +105,30 @@
     rgba(212, 168, 83, 0.03) 0%,
     transparent 70%
   );
-  animation: float 25s ease-in-out infinite reverse;
+  animation:
+    orbDriftB 32s ease-in-out infinite,
+    orbGlow 17s ease-in-out 2s infinite;
   /* will-change removed — let browser auto-promote animated layers */
-  opacity: 0.02;
+  opacity: 0.03;
+}
+
+/* Orbs wander in slow two-dimensional loops instead of bobbing in place.
+   Compositor-only (transform + opacity), matching the perf rules above. */
+@keyframes orbDriftA {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(4%, 6%) scale(1.07); }
+  66% { transform: translate(-3%, 2%) scale(0.96); }
+}
+
+@keyframes orbDriftB {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  40% { transform: translate(-5%, -4%) scale(1.08); }
+  75% { transform: translate(2%, -7%) scale(0.95); }
+}
+
+@keyframes orbGlow {
+  0%, 100% { opacity: 0.025; }
+  50% { opacity: 0.06; }
 }
 
 .lightRays {
@@ -71,6 +145,12 @@
     transparent 60%
   );
   opacity: 0.8;
+  animation: lightRaySway 14s ease-in-out infinite;
+}
+
+@keyframes lightRaySway {
+  0%, 100% { opacity: 0.65; }
+  50% { opacity: 0.95; }
 }
 
 /* ===================================================
@@ -257,7 +337,10 @@
   color: var(--accent-gold);
   /* Static text-shadow replaces animated filter:drop-shadow */
   text-shadow: 0 0 16px rgba(212, 168, 83, 0.35);
-  animation: float 5s ease-in-out infinite;
+  /* popIn owns transform until float's delay elapses, then float takes over */
+  animation:
+    popIn 0.6s var(--ease-spring) backwards,
+    float 5s ease-in-out 0.6s infinite;
 }
 
 .welcomeGreeting {
@@ -267,9 +350,9 @@
   color: var(--text-primary);
   margin-bottom: var(--space-3);
   letter-spacing: 0.04em;
-  animation: slideUp 0.8s ease-out;
+  animation: springUp 0.7s var(--ease-spring-soft);
   animation-fill-mode: backwards;
-  animation-delay: 0.2s;
+  animation-delay: 0.15s;
   background: linear-gradient(
     135deg,
     var(--text-primary),
@@ -286,9 +369,9 @@
   color: var(--text-secondary);
   font-style: italic;
   margin-bottom: var(--space-12);
-  animation: slideUp 0.8s ease-out;
+  animation: springUp 0.7s var(--ease-spring-soft);
   animation-fill-mode: backwards;
-  animation-delay: 0.4s;
+  animation-delay: 0.3s;
 }
 
 .suggestionChips {
@@ -296,9 +379,6 @@
   flex-wrap: wrap;
   gap: var(--space-3);
   justify-content: center;
-  animation: slideUp 0.8s ease-out;
-  animation-fill-mode: backwards;
-  animation-delay: 0.6s;
 }
 
 .suggestionChip {
@@ -317,7 +397,14 @@
   /* Removed: background, box-shadow transitions — these trigger paint */
   position: relative;
   overflow: hidden;
+  /* Chips cascade in one after another instead of arriving as a block */
+  animation: springUp 0.55s var(--ease-spring) backwards;
 }
+
+.suggestionChip:nth-child(1) { animation-delay: 0.45s; }
+.suggestionChip:nth-child(2) { animation-delay: 0.55s; }
+.suggestionChip:nth-child(3) { animation-delay: 0.65s; }
+.suggestionChip:nth-child(4) { animation-delay: 0.75s; }
 
 .suggestionChip::before {
   content: '';
@@ -381,7 +468,7 @@
 
 /* Only freshly sent/received messages get entrance animation */
 .messageRowAnimated {
-  animation: slideUpSubtle 0.25s ease-out both;
+  animation: springUp 0.45s var(--ease-spring-soft) both;
 }
 
 .messageRowUser {
@@ -566,7 +653,7 @@
 
 /* Streaming bubble (override messageRow slideUp — runs once on appear) */
 .streamingBubble.messageRow {
-  animation: slideUpSubtle 0.3s ease-out both;
+  animation: springUp 0.5s var(--ease-spring-soft) both;
 }
 
 /* Per-chunk streamReveal animation removed — at 40 tok/s from Ollama,
@@ -575,21 +662,26 @@
 .streamChunk {
   display: inline;
   opacity: 0;
-  animation: wordIn 0.3s ease-out forwards;
+  animation: wordIn 0.35s ease-out forwards;
 }
 
 .streamPartial {
   display: inline;
   opacity: 0;
-  animation: wordIn 0.3s ease-out forwards;
+  animation: wordIn 0.35s ease-out forwards;
 }
 
+/* Words settle from a soft blur, like ink drying on the page. Transforms
+   don't apply to inline boxes, so blur + opacity carry the whole effect —
+   blur stays small and brief to keep per-span paint cost negligible. */
 @keyframes wordIn {
   from {
     opacity: 0;
+    filter: blur(4px);
   }
   to {
     opacity: 1;
+    filter: blur(0);
   }
 }
 
@@ -791,10 +883,25 @@
   border: none;
   box-shadow: var(--md-elevation-1);
   overflow: hidden;
+  /* Transform springs so the press release bounces back; the rest stays standard */
   transition:
-    transform var(--md-duration-short) var(--md-motion-standard),
+    transform 0.3s var(--ease-spring),
     box-shadow var(--md-duration-short) var(--md-motion-standard),
     opacity var(--md-duration-short) var(--md-motion-standard);
+}
+
+/* Pops when it becomes pressable: first character typed, or send↔stop swap */
+.mdFab:enabled {
+  animation: fabPop 0.35s var(--ease-spring);
+}
+
+@keyframes fabPop {
+  from { transform: scale(0.8); }
+  to { transform: scale(1); }
+}
+
+.mdFab:active:not(:disabled) {
+  transform: scale(0.9);
 }
 
 .mdFab::before {
@@ -847,6 +954,19 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  /* The send/stop buttons swap mounts, so each swap rotates its icon in */
+  animation: iconSwapIn 0.35s var(--ease-spring);
+}
+
+@keyframes iconSwapIn {
+  from {
+    transform: rotate(-90deg) scale(0.4);
+    opacity: 0;
+  }
+  to {
+    transform: rotate(0deg) scale(1);
+    opacity: 1;
+  }
 }
 
 .mdFabStop {
@@ -885,7 +1005,19 @@
     transform var(--transition-fast),
     border-color var(--transition-fast),
     box-shadow var(--transition-fast);
-  animation: slideUp 0.3s ease-out;
+  /* Keyframe carries translateX(-50%) so the entrance never loses centering */
+  animation: riseCentered 0.4s var(--ease-spring) both;
+}
+
+@keyframes riseCentered {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
 }
 
 .scrollToBottom:hover {
@@ -937,7 +1069,7 @@
   background: var(--danger-bg);
   border: 1px solid rgba(239, 68, 68, 0.25);
   border-radius: var(--radius-lg);
-  animation: slideUp 0.3s ease-out;
+  animation: riseCentered 0.4s var(--ease-spring) both;
   max-width: min(90vw, var(--max-chat-width));
 }
 
@@ -1075,7 +1207,7 @@
   min-width: 0;
   position: relative;
   overflow: hidden;
-  transition: transform var(--transition-base);
+  transition: transform 0.4s var(--ease-spring-soft);
 }
 
 /* Sidebar Layout */
@@ -1088,7 +1220,8 @@
   flex-direction: column;
   z-index: var(--z-above);
   flex-shrink: 0;
-  transition: transform var(--transition-base);
+  /* Matches .mainWrapper so the drawer and content shift spring together */
+  transition: transform 0.4s var(--ease-spring-soft);
 }
 
 /* Header adjustments */
@@ -1236,6 +1369,30 @@
 .sidebarItem:hover {
   background: var(--bg-card);
   color: var(--text-primary);
+}
+
+/* Items cascade in as the drawer opens */
+.sidebarOpen .sidebarItem {
+  animation: sidebarItemIn 0.4s var(--ease-spring-soft) backwards;
+}
+
+.sidebarOpen .sidebarItem:nth-child(1) { animation-delay: 0.08s; }
+.sidebarOpen .sidebarItem:nth-child(2) { animation-delay: 0.12s; }
+.sidebarOpen .sidebarItem:nth-child(3) { animation-delay: 0.16s; }
+.sidebarOpen .sidebarItem:nth-child(4) { animation-delay: 0.2s; }
+.sidebarOpen .sidebarItem:nth-child(5) { animation-delay: 0.24s; }
+.sidebarOpen .sidebarItem:nth-child(6) { animation-delay: 0.28s; }
+.sidebarOpen .sidebarItem:nth-child(n + 7) { animation-delay: 0.32s; }
+
+@keyframes sidebarItemIn {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .sidebarItemActive {
@@ -1485,7 +1642,7 @@
   padding: var(--space-8);
   box-shadow: var(--shadow-xl);
   text-align: center;
-  animation: scaleIn var(--transition-base) ease-out;
+  animation: popIn 0.4s var(--ease-spring);
 }
 
 .onboardingIcon {
@@ -1588,7 +1745,7 @@
   background: var(--bg-secondary);
   border-left: 1px solid var(--border);
   box-shadow: var(--shadow-xl);
-  animation: slideInRight var(--transition-base) ease-out;
+  animation: slideInRight 0.45s var(--ease-spring-soft);
 }
 
 @keyframes slideInRight {

@@ -86,6 +86,12 @@
   --transition-slow: 400ms cubic-bezier(0.4, 0, 0.2, 1);
   --transition-spring: 500ms cubic-bezier(0.34, 1.56, 0.64, 1);
 
+  /* — Spring easings — cubic-bezier fallback here; upgraded below to true
+     multi-point springs via linear() where supported. Spring keyframes stay
+     simple from/to pairs — the bounce lives entirely in the curve. */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-spring-soft: cubic-bezier(0.34, 1.3, 0.64, 1);
+
   /* — Z-Index — */
   --z-base: 1;
   --z-above: 10;
@@ -113,6 +119,24 @@
   --md-state-focus: rgba(245, 240, 232, 0.08);
   --md-motion-standard: cubic-bezier(0.2, 0, 0, 1);
   --md-duration-short: 200ms;
+}
+
+/* True spring curves: rise, overshoot, settle. Browsers without linear()
+   drop these declarations and keep the cubic-bezier fallbacks above. */
+@supports (transition-timing-function: linear(0, 1)) {
+  :root {
+    --ease-spring: linear(
+      0, 0.008 1.1%, 0.031 2.2%, 0.129 4.8%, 0.257 7.2%, 0.671 14.2%,
+      0.789 16.5%, 0.881 18.6%, 0.957 20.7%, 1.019 22.9%, 1.063 25.1%,
+      1.094 27.4%, 1.114 30%, 1.123 32.8%, 1.119 35.9%, 1.105 39.6%,
+      1.059 47.2%, 1.022 55.4%, 1.002 64.4%, 0.995 74.4%, 1
+    );
+    --ease-spring-soft: linear(
+      0, 0.013 1.5%, 0.054 3.1%, 0.196 6.4%, 0.422 10.6%, 0.683 15.4%,
+      0.873 19.5%, 0.984 23.1%, 1.033 26.6%, 1.049 30.2%, 1.046 34.3%,
+      1.03 39.6%, 1.011 46.4%, 1.001 54.4%, 0.998 64.5%, 1
+    );
+  }
 }
 
 /* ===================================================
@@ -196,12 +220,17 @@ body {
    the browser to calculate transitions on EVERY element during scroll/render,
    causing massive jank. Theme transitions are handled per-component instead. */
 
-/* Reduced motion: disable all animations for accessibility */
+/* Reduced motion: disable all animations for accessibility.
+   Delays must be zeroed too — staggered entrances use animation-delay with
+   backwards fill, which would otherwise hold elements invisible until the
+   delay elapses. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
+    animation-delay: 0s !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
   }
 }
 
@@ -284,6 +313,10 @@ h1, h2, h3, h4, h5, h6 {
 
 /* ===================================================
    Keyframe Animations
+   NOTE: these are only reachable from plain (non-module) CSS and the
+   utility classes below. CSS Modules hash their animation-name references,
+   so *.module.css files must define their own copies of any keyframe they
+   use (see the module-local keyframes block in page.module.css).
    =================================================== */
 
 /* — Fade In — */
@@ -377,6 +410,30 @@ h1, h2, h3, h4, h5, h6 {
   from {
     opacity: 0;
     transform: scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* — Spring Up — pair with --ease-spring(-soft); the curve supplies the bounce */
+@keyframes springUp {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* — Pop In — entrances that should feel like they arrive, not appear */
+@keyframes popIn {
+  from {
+    opacity: 0;
+    transform: scale(0.85);
   }
   to {
     opacity: 1;
