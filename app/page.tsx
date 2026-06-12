@@ -91,11 +91,38 @@ export default function Home() {
   useEffect(() => {
     if (messages.length > 0 || streamingContent) {
       if (!isNearBottomRef.current) return;
-      /* Always use instant scroll during streaming — smooth creates
-         compounding animation frames as the target moves every token */
+      /* While streaming (and motion is allowed), the glide loop below owns
+         the scroll — eased following reads as breathing, not twitching. */
+      if (isStreaming && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
       scrollToBottom('auto');
     }
   }, [messages, streamingContent, isStreaming, scrollToBottom]);
+
+  /* Eased scroll-follow during streaming: each frame, close a fraction of
+     the distance to the bottom instead of teleporting. Pauses automatically
+     when the reader scrolls up (isNearBottomRef goes false). */
+  useEffect(() => {
+    if (!isStreaming) return;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const el = chatAreaRef.current;
+    if (!el) return;
+
+    let rafId: number;
+    const glide = () => {
+      if (isNearBottomRef.current) {
+        const targetTop = el.scrollHeight - el.clientHeight;
+        const dist = targetTop - el.scrollTop;
+        if (dist > 1) {
+          el.scrollTop += Math.max(1, dist * 0.18);
+        } else if (dist > 0) {
+          el.scrollTop = targetTop;
+        }
+      }
+      rafId = requestAnimationFrame(glide);
+    };
+    rafId = requestAnimationFrame(glide);
+    return () => cancelAnimationFrame(rafId);
+  }, [isStreaming]);
 
   useEffect(() => {
     const el = chatAreaRef.current;

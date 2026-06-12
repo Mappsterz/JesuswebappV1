@@ -39,16 +39,7 @@ export const MessageList = forwardRef<HTMLDivElement, Props>(function MessageLis
           );
         })}
 
-        {isStreaming && streamingContent && <StreamingBubble content={streamingContent} />}
-
-        {isStreaming && !streamingContent && (
-          <div className={styles.typingIndicator}>
-            <div className={styles.typingBubble}>
-              <span className={styles.typingLabel}>Jesus</span>
-              <span className={styles.thinkingSpinner} />
-            </div>
-          </div>
-        )}
+        {isStreaming && <StreamingBubble content={streamingContent} />}
 
         <div ref={endRef} />
       </div>

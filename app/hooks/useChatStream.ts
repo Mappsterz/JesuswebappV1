@@ -54,23 +54,85 @@ export function useChatStream({ activeId, updateActiveMessages, titleFromFirstMe
   const rafRef = useRef<number | null>(null);
   const lastMessagesRef = useRef<Message[]>([]);
 
-  /* Buffer token updates and flush once per animation frame to avoid
-     a React re-render on every streamed chunk. */
+  /* ── Paced reveal ──
+     Network chunks land in accumulatedRef in bursts; revealing them as they
+     arrive makes text appear in slabs. Instead, a rAF loop drips characters
+     into view at a rate proportional to the backlog: steady when the stream
+     is steady, faster when it falls behind, and a quick drain once the
+     network is done so pacing never outlives the real response time. */
+  const revealedRef = useRef(0);
+  const streamDoneRef = useRef(false);
+  const drainResolveRef = useRef<(() => void) | null>(null);
+
+  const revealTarget = useCallback(() => {
+    /* Never reveal an in-stream error marker as visible text */
+    const full = accumulatedRef.current;
+    const markerIdx = full.indexOf(STREAM_ERROR_MARKER);
+    return markerIdx === -1 ? full.length : markerIdx;
+  }, []);
+
+  /* Force-complete the reveal (error paths, stream end safety) */
   const flushStreamingToState = useCallback(() => {
     if (rafRef.current != null) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     }
+    revealedRef.current = accumulatedRef.current.length;
     setStreamingContent(accumulatedRef.current);
   }, []);
 
+  const revealTick = useCallback(function tick() {
+    rafRef.current = null;
+    const target = revealTarget();
+    let cursor = revealedRef.current;
+
+    if (cursor < target) {
+      const instant =
+        document.visibilityState === 'hidden' ||
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (instant) {
+        cursor = target;
+      } else {
+        const backlog = target - cursor;
+        /* Reveal a fraction of the backlog per frame: exponential catch-up
+           that converges smoothly. Drain ~4x faster once the network is done. */
+        const divisor = streamDoneRef.current ? 5 : 22;
+        cursor = Math.min(target, cursor + Math.max(2, Math.ceil(backlog / divisor)));
+      }
+      revealedRef.current = cursor;
+      setStreamingContent(accumulatedRef.current.slice(0, cursor));
+    }
+
+    if (!streamDoneRef.current || cursor < revealTarget()) {
+      rafRef.current = requestAnimationFrame(tick);
+    } else {
+      drainResolveRef.current?.();
+      drainResolveRef.current = null;
+    }
+  }, [revealTarget]);
+
   const scheduleFlush = useCallback(() => {
     if (rafRef.current != null) return;
-    rafRef.current = requestAnimationFrame(() => {
-      rafRef.current = null;
-      setStreamingContent(accumulatedRef.current);
-    });
-  }, []);
+    rafRef.current = requestAnimationFrame(revealTick);
+  }, [revealTick]);
+
+  /* Wait for the paced reveal to catch up after the network finishes.
+     Time-capped so a throttled/hidden tab can never stall the commit. */
+  const drainReveal = useCallback(async () => {
+    streamDoneRef.current = true;
+    if (revealedRef.current >= revealTarget()) return;
+    /* rAF doesn't fire in hidden tabs — nothing to pace offscreen, so let the
+       caller's flush reveal everything at once instead of waiting out the cap */
+    if (document.visibilityState === 'hidden') return;
+    scheduleFlush();
+    await Promise.race([
+      new Promise<void>((resolve) => {
+        drainResolveRef.current = resolve;
+      }),
+      new Promise<void>((resolve) => setTimeout(resolve, 4000)),
+    ]);
+    drainResolveRef.current = null;
+  }, [revealTarget, scheduleFlush]);
 
   const commitAssistant = useCallback(
     (content: string) => {
@@ -90,6 +152,8 @@ export function useChatStream({ activeId, updateActiveMessages, titleFromFirstMe
       setLastError(null);
       setConnectionHealth('connected');
       accumulatedRef.current = '';
+      revealedRef.current = 0;
+      streamDoneRef.current = false;
       lastMessagesRef.current = messagesToSend;
 
       abortRef.current?.abort();
@@ -121,6 +185,8 @@ export function useChatStream({ activeId, updateActiveMessages, titleFromFirstMe
         }
         accumulatedRef.current += decoder.decode();
 
+        /* Let the paced reveal catch up before settling the message */
+        await drainReveal();
         flushStreamingToState();
 
         /* Check for structured error markers from the API */
@@ -137,6 +203,7 @@ export function useChatStream({ activeId, updateActiveMessages, titleFromFirstMe
           commitAssistant(accumulatedRef.current);
         }
       } catch (err: unknown) {
+        streamDoneRef.current = true;
         flushStreamingToState();
         if (err instanceof Error && err.name === 'AbortError') {
           commitAssistant(accumulatedRef.current);
@@ -151,13 +218,21 @@ export function useChatStream({ activeId, updateActiveMessages, titleFromFirstMe
           commitAssistant(CONNECTION_ERROR);
         }
       } finally {
+        streamDoneRef.current = true;
+        if (rafRef.current != null) {
+          cancelAnimationFrame(rafRef.current);
+          rafRef.current = null;
+        }
+        drainResolveRef.current?.();
+        drainResolveRef.current = null;
         accumulatedRef.current = '';
+        revealedRef.current = 0;
         setStreamingContent('');
         setIsStreaming(false);
         onSettled?.();
       }
     },
-    [commitAssistant, flushStreamingToState, scheduleFlush, onSettled]
+    [commitAssistant, flushStreamingToState, scheduleFlush, drainReveal, onSettled]
   );
 
   const sendMessage = useCallback(
