@@ -21,14 +21,14 @@ A compassionate AI spiritual guide inspired by the teachings of Jesus Christ. It
 - Next.js 16 (App Router) + React 19
 - CSS Modules
 - `react-markdown` + `remark-gfm`
-- Dual AI backend: Ollama (local) or Google Gemini (cloud)
+- Pluggable AI backends: Ollama (local), any OpenAI-compatible API (Groq, OpenRouter, Together, …), or Google Gemini
 
 ## Architecture
 
 ```
 app/
   api/
-    chat/route.ts        # streaming chat: Ollama or Gemini
+    chat/route.ts        # streaming chat: provider chain + watchdog + error markers
     bible/route.ts        # cached bible-api.com proxy
   components/             # UI: Sidebar, MessageList, ChatInput, BiblePanel, modals, icons
   hooks/                  # useConversations, useChatStream, useTheme
@@ -38,6 +38,7 @@ app/
 lib/
   types.ts
   devotional.ts           # daily passage rotation
+  providers/              # backend adapters: ollama, openaiCompat, gemini
 ollama/
   Modelfile               # custom "walk-with-me" persona
   setup.sh
@@ -73,19 +74,26 @@ Open [http://localhost:3000](http://localhost:3000).
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama server URL |
 | `OLLAMA_MODEL` | `walk-with-me` | Ollama model name |
 
-## Deploying to Vercel (Gemini)
+## Deploying to Vercel (cloud backends)
 
-On Vercel there is no local Ollama, so the app uses Google Gemini.
+On Vercel there is no local Ollama, so configure a cloud backend — either any
+OpenAI-compatible provider (Groq, OpenRouter, Together, Mistral, OpenAI, …) or
+Google Gemini. Configuring both gives you a fallback chain.
 
 1. Set environment variables in the Vercel project:
 
 | Variable | Required | Purpose |
 |----------|----------|---------|
-| `GEMINI_API_KEY` | Yes | Enables the Gemini backend |
-| `GEMINI_MODEL` | No | Model ID (default `gemini-2.5-flash-lite` for speed; use `gemini-3.5-flash` for higher quality) |
+| `OPENAI_API_KEY` | One of the two keys | Enables the OpenAI-compatible backend |
+| `OPENAI_BASE_URL` | No | Endpoint base (default `https://api.openai.com/v1`; e.g. `https://api.groq.com/openai/v1`) |
+| `OPENAI_MODELS` | No | Comma-separated model fallback chain (default `gpt-4o-mini`) |
+| `OPENAI_MAX_OUTPUT_TOKENS` | No | Cap reply length (default `768`) |
+| `GEMINI_API_KEY` | One of the two keys | Enables the Gemini backend |
+| `GEMINI_MODELS` | No | Comma-separated model fallback chain (default `gemini-2.5-flash,gemini-2.5-flash-lite`) |
 | `GEMINI_MAX_OUTPUT_TOKENS` | No | Cap reply length (default `768`) |
+| `CHAT_PROVIDERS` | No | Explicit provider order, e.g. `openai,gemini` |
 
-**Response time tips on Vercel:** The default model is `gemini-2.5-flash-lite` for faster time-to-first-token. The API trims long chats to the last 12 messages and caps output at 768 tokens so replies stay concise.
+**Response time tips on Vercel:** The API trims long chats to the last 12 messages and caps output at 768 tokens so replies stay concise.
 
 2. Deploy:
 
@@ -93,10 +101,14 @@ On Vercel there is no local Ollama, so the app uses Google Gemini.
 npx vercel deploy --prod
 ```
 
-The chat route uses a singleton Gemini client (no per-request SDK import), runs on the Node.js runtime with `maxDuration = 60`, and trims conversation history before each request.
+The chat route runs on the Node.js runtime with `maxDuration = 60` and trims conversation history before each request.
 
 ## Backend selection logic
 
-- If `OLLAMA_URL` is set, Ollama is used.
-- Else if `GEMINI_API_KEY` is set, Gemini is used (typical on Vercel).
-- Otherwise it tries Ollama at `localhost`.
+Providers form a fallback chain, tried in order until one streams successfully:
+
+1. `ollama` — included first when `OLLAMA_URL` is set
+2. `openai` — included when `OPENAI_API_KEY` is set (any OpenAI-compatible endpoint via `OPENAI_BASE_URL`)
+3. `gemini` — included when `GEMINI_API_KEY` is set
+
+With nothing configured, the app tries Ollama at `localhost` (local dev default). Set `CHAT_PROVIDERS` (e.g. `ollama,openai`) to override the order explicitly.
