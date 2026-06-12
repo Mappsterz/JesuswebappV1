@@ -16,11 +16,11 @@ const lora = Lora({
 });
 
 export const metadata: Metadata = {
-  title: "Walk With Me — Your AI Spiritual Companion",
+  title: "Walk With Me — Your AI Spiritual Guide",
   description:
-    "A compassionate AI companion inspired by the teachings and wisdom of Jesus Christ. Find comfort, guidance, and spiritual counsel in a safe and peaceful space.",
+    "A compassionate AI guide inspired by the teachings and wisdom of Jesus Christ. Find comfort, guidance, and spiritual counsel in a safe and peaceful space.",
   keywords: [
-    "spiritual companion",
+    "spiritual guide",
     "AI counselor",
     "faith",
     "prayer",

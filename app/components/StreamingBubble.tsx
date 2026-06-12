@@ -109,7 +109,7 @@ export function StreamingBubble({ content }: Props) {
   return (
     <div className={`${styles.messageRow} ${styles.messageRowAssistant} ${styles.streamingBubble}`}>
       <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant}`}>
-        <span className={styles.messageLabel}>Jesus</span>
+        <span className={styles.messageLabel}>Guide</span>
         <div
           className={`${styles.messageContent} ${styles.markdown}`}
           aria-live="polite"

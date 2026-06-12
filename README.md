@@ -1,6 +1,6 @@
 # Walk With Me
 
-A compassionate AI spiritual companion inspired by the teachings of Jesus Christ. It offers comfort, reflection, prayer, and Scripture through a calm, streaming chat interface.
+A compassionate AI spiritual guide inspired by the teachings of Jesus Christ. It offers comfort, reflection, prayer, and Scripture through a calm, streaming chat interface.
 
 > Walk With Me is not a substitute for a local church, pastor, or licensed counselor. If you are in crisis, call or text 988 (US Suicide & Crisis Lifeline) or text HOME to 741741.
 

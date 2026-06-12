@@ -36,7 +36,7 @@ function MessageBubbleImpl({ message, isLast, canRegenerate, onRegenerate, isNew
     >
       <div className={`${styles.messageBubble} ${isUser ? styles.messageBubbleUser : styles.messageBubbleAssistant}`}>
         <span className={`${styles.messageLabel} ${isUser ? styles.messageLabelUser : ''}`}>
-          {isUser ? 'You' : 'Jesus'}
+          {isUser ? 'You' : 'Guide'}
         </span>
 
         {isUser ? (

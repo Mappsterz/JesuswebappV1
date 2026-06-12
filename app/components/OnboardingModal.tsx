@@ -21,7 +21,7 @@ export function OnboardingModal({ open, onClose }: Props) {
           Welcome to Walk With Me
         </h2>
         <p className={styles.modalMessage}>
-          This is a compassionate AI companion inspired by the teachings of Jesus Christ. It offers
+          This is a compassionate AI guide inspired by the teachings of Jesus Christ. It offers
           comfort, reflection, and Scripture — but it is not a substitute for a local church, pastor,
           or licensed counselor.
         </p>
