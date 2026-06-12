@@ -19,6 +19,15 @@ const GEMINI_MODELS: string[] = (process.env.GEMINI_MODELS || 'gemini-2.5-flash,
   .map((m) => m.trim())
   .filter(Boolean);
 
+/* gemini-2.5-flash "thinks" by default, and thinking tokens count against
+   maxOutputTokens — a long hidden reasoning pass can eat nearly the whole
+   budget and cut the visible reply off mid-sentence (observed: 735 of 768
+   tokens spent on thoughts, 29 left for the answer). Thinking is disabled
+   by default. Set GEMINI_THINKING_BUDGET to -1 for dynamic thinking or a
+   positive token cap (required for models like gemini-2.5-pro that cannot
+   disable thinking); set it to "off" to omit thinkingConfig entirely. */
+const GEMINI_THINKING_BUDGET = Number(process.env.GEMINI_THINKING_BUDGET ?? '0');
+
 export function isGeminiConfigured(): boolean {
   return Boolean(GEMINI_API_KEY);
 }
@@ -36,11 +45,25 @@ function getGeminiClient(): GoogleGenAI {
   return geminiClient;
 }
 
+type GeminiChunk = {
+  text?: string;
+  candidates?: { finishReason?: string }[];
+};
+
 async function* geminiChunks(
-  response: AsyncIterable<{ text?: string }>
+  response: AsyncIterable<GeminiChunk>,
+  model: string
 ): AsyncGenerator<string> {
+  let finishReason: string | undefined;
   for await (const chunk of response) {
     if (chunk.text) yield chunk.text;
+    const reason = chunk.candidates?.[0]?.finishReason;
+    if (reason) finishReason = reason;
+  }
+  /* MAX_TOKENS here means the visible reply was truncated mid-sentence —
+     surface it in logs so token-budget problems are diagnosable. */
+  if (finishReason && finishReason !== 'STOP') {
+    console.warn(`[Walk With Me] gemini ${model} finished with ${finishReason}`);
   }
 }
 
@@ -69,9 +92,12 @@ export const geminiProvider: ChatProvider = {
             temperature: GEMINI_TEMPERATURE,
             topP: GEMINI_TOP_P,
             maxOutputTokens: GEMINI_MAX_OUTPUT_TOKENS,
+            ...(Number.isFinite(GEMINI_THINKING_BUDGET)
+              ? { thinkingConfig: { thinkingBudget: GEMINI_THINKING_BUDGET } }
+              : {}),
           },
         });
-        return { backend: 'gemini', model: modelName, chunks: geminiChunks(response) };
+        return { backend: 'gemini', model: modelName, chunks: geminiChunks(response, modelName) };
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
         const errMsg = lastError.message.toLowerCase();
