@@ -311,11 +311,13 @@ export default function Home() {
         </header>
 
         <main className={styles.main}>
-          {/* Dual-layer crossfade: both mounted, opacity transition via CSS */}
-          <div className={`${styles.viewLayer} ${showWelcome ? styles.viewVisible : styles.viewHidden}`}>
+          {/* Dual-layer directional hand-off: both mounted, choreographed via CSS.
+              Identity classes (welcomeLayer/chatLayer) let each layer move in its
+              own direction — welcome lifts away, chat rises in. */}
+          <div className={`${styles.viewLayer} ${styles.welcomeLayer} ${showWelcome ? styles.viewVisible : styles.viewHidden}`}>
             <WelcomeScreen onSuggestion={handleSuggestion} />
           </div>
-          <div className={`${styles.viewLayer} ${!showWelcome ? styles.viewVisible : styles.viewHidden}`}>
+          <div className={`${styles.viewLayer} ${styles.chatLayer} ${!showWelcome ? styles.viewVisible : styles.viewHidden}`}>
             <MessageList
               ref={chatAreaRef}
               endRef={messagesEndRef}

@@ -291,25 +291,95 @@
 }
 
 /* ===================================================
-   View Layer Crossfade (welcome ↔ chat)
+   View Layer transition (welcome ↔ chat)
+   Directional hand-off: the welcome lifts + softens away while the
+   conversation rises into place. Both layers stay mounted; visibility
+   flips only at the END of an exit so the leaving layer animates fully.
    =================================================== */
 .viewLayer {
   position: absolute;
   inset: 0;
   display: flex;
   flex-direction: column;
-  transition: opacity 0.25s ease-out, visibility 0.25s;
+  transition:
+    opacity 0.45s var(--ease-spring-soft),
+    transform 0.45s var(--ease-spring-soft),
+    filter 0.45s var(--ease-spring-soft),
+    visibility 0s linear 0.45s;
 }
 
 .viewVisible {
   opacity: 1;
+  transform: none;
+  filter: none;
   visibility: visible;
+  /* Entering layer must show immediately — drop the end-of-exit visibility delay */
+  transition:
+    opacity 0.45s var(--ease-spring-soft),
+    transform 0.45s var(--ease-spring-soft),
+    filter 0.45s var(--ease-spring-soft);
 }
 
 .viewHidden {
-  opacity: 0;
-  visibility: hidden;
   pointer-events: none;
+  visibility: hidden;
+}
+
+/* Welcome leaves forward (up + soften); chat waits/returns from below. */
+.welcomeLayer.viewHidden {
+  opacity: 0;
+  transform: translateY(-16px) scale(0.985);
+  filter: blur(6px);
+}
+
+.chatLayer.viewHidden {
+  opacity: 0;
+  transform: translateY(16px);
+}
+
+/* Reverse-stagger the welcome content out: chips first, then subtitle,
+   greeting, icon — the screen clears in sequence, not as one rigid block.
+   A resting transition on these elements keeps the return smooth too. The
+   icon animates opacity ONLY so it never fights its infinite float transform. */
+.welcomeLayer .welcomeGreeting,
+.welcomeLayer .welcomeSubtitle,
+.welcomeLayer .suggestionChips {
+  transition:
+    opacity 0.4s var(--ease-spring-soft),
+    transform 0.4s var(--ease-spring-soft);
+}
+
+.welcomeLayer.viewHidden .suggestionChips {
+  opacity: 0;
+  transform: translateY(-10px);
+  transition-delay: 0s;
+}
+
+.welcomeLayer.viewHidden .welcomeSubtitle {
+  opacity: 0;
+  transform: translateY(-10px);
+  transition-delay: 0.05s;
+}
+
+.welcomeLayer.viewHidden .welcomeGreeting {
+  opacity: 0;
+  transform: translateY(-10px);
+  transition-delay: 0.1s;
+}
+
+.welcomeLayer.viewHidden .welcomeIcon {
+  opacity: 0;
+  transition: opacity 0.4s var(--ease-spring-soft);
+  transition-delay: 0.15s;
+}
+
+/* Reduced motion: collapse to a clean instant cut — no blur/transform residue
+   (the global guard already zeroes durations and delays). */
+@media (prefers-reduced-motion: reduce) {
+  .viewLayer {
+    transform: none !important;
+    filter: none !important;
+  }
 }
 
 /* ===================================================
@@ -656,42 +726,31 @@
   animation: springUp 0.5s var(--ease-spring-soft) both;
 }
 
-/* Per-chunk streamReveal animation removed — at 40 tok/s from Ollama,
-   it created ~10 overlapping CSS animations per second causing frame drops.
-   Chunks now appear instantly; the streaming cursor provides visual feedback. */
-.streamChunk {
+/* Streamed text reveals as a gradient in space rather than an animation per
+   element: the newest characters carry a position-derived opacity set inline,
+   and firm up as the paced reveal slides them back through the window. Nothing
+   mounts hidden, so nothing blinks, and no per-word animations stack up. */
+.streamSettled {
   display: inline;
-  opacity: 0;
-  animation: wordIn 0.35s ease-out forwards;
 }
 
-.streamPartial {
+.streamRampChar {
   display: inline;
-  opacity: 0;
-  animation: wordIn 0.35s ease-out forwards;
+  transition: opacity 120ms linear;
 }
 
-/* Words settle from a soft blur, like ink drying on the page. Transforms
-   don't apply to inline boxes, so blur + opacity carry the whole effect —
-   blur stays small and brief to keep per-span paint cost negligible. */
-@keyframes wordIn {
-  from {
-    opacity: 0;
-    filter: blur(4px);
-  }
-  to {
-    opacity: 1;
-    filter: blur(0);
-  }
+/* Element boundaries shouldn't introduce line-break opportunities, but keeping
+   a split word on one line costs nothing on a window this small. */
+.streamRampWord {
+  white-space: nowrap;
 }
 
-/* Under reduced motion the words must simply be visible — a frozen fade-in
-   would leave streamed text invisible. */
+/* Reduced motion gets no ramp at all. !important is required here to beat the
+   inline opacity that drives the gradient. */
 @media (prefers-reduced-motion: reduce) {
-  .streamChunk,
-  .streamPartial {
-    animation: none !important;
-    opacity: 1;
+  .streamRampChar {
+    opacity: 1 !important;
+    transition: none !important;
   }
 }
 

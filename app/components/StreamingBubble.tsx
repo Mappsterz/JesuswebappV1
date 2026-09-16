@@ -1,110 +1,139 @@
 'use client';
 
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import styles from '../page.module.css';
 
-/* Inside a single paragraph, fold plain-text spans into the markdown zone
-   once they exceed this size so the span list stays bounded. Folding
-   normally happens earlier, at paragraph boundaries. */
-const SEGMENT_FOLD_THRESHOLD = 600;
+/* Inside a single paragraph, fold plain text into the markdown zone once it
+   exceeds this size, so raw syntax never lingers in a very long paragraph.
+   Folding normally happens earlier, at paragraph boundaries. */
+const FOLD_THRESHOLD = 600;
 
-type WordSegment = {
-  id: number;
-  text: string;
-};
+/* Leading-edge gradient. The newest characters carry a static, position-derived
+   opacity, so the reveal is a gradient in space rather than a fade animation
+   per word: nothing mounts hidden, so nothing blinks. */
+const RAMP_MIN = 14;
+const RAMP_MAX = 44;
+const RAMP_MIN_OPACITY = 0.06;
+
+/* Reveal speed swings with network backlog, so the window is sized from a
+   smoothed read of characters-per-render. Quantizing the result keeps steady
+   streaming from re-rendering on width changes nobody can see. */
+const RATE_SMOOTHING = 0.3;
+const RAMP_PER_CHAR = 3;
+const RAMP_STEP = 4;
+
+/* Once text stops arriving, firm the tail to full opacity: a stall mid-reply,
+   or the last frame before the message commits, must not leave characters
+   sitting faint. */
+const SETTLE_DELAY_MS = 90;
+
+/* Where the markdown zone ends. Pure function of the text, so the split is
+   stable across re-renders and needs no history. */
+function computeStableLen(content: string, rampStart: number): number {
+  const searchEnd = rampStart - 2;
+  const breakIdx = searchEnd >= 0 ? content.lastIndexOf('\n\n', searchEnd) : -1;
+  const afterBreak = breakIdx === -1 ? 0 : breakIdx + 2;
+
+  if (rampStart - afterBreak > FOLD_THRESHOLD) {
+    const spaceIdx = content.lastIndexOf(' ', rampStart - 1);
+    if (spaceIdx >= afterBreak) return spaceIdx + 1;
+  }
+  return afterBreak;
+}
 
 type Props = {
   content: string;
 };
 
-function resetStreamState(
-  stableLenRef: React.MutableRefObject<number>,
-  segmentsRef: React.MutableRefObject<WordSegment[]>,
-  partialRef: React.MutableRefObject<string>,
-  nextIdRef: React.MutableRefObject<number>
-) {
-  stableLenRef.current = 0;
-  segmentsRef.current = [];
-  partialRef.current = '';
-  nextIdRef.current = 0;
-}
-
 export function StreamingBubble({ content }: Props) {
-  const stableLenRef = useRef(0);
-  const segmentsRef = useRef<WordSegment[]>([]);
-  const partialRef = useRef('');
-  const nextIdRef = useRef(0);
-  const lastContentRef = useRef('');
+  const [rampLen, setRampLen] = useState(RAMP_MIN);
+  const [settledLen, setSettledLen] = useState(-1);
+  const rateRef = useRef(0);
+  const lastLenRef = useRef(0);
 
-  if (!content) {
-    if (lastContentRef.current) {
-      resetStreamState(stableLenRef, segmentsRef, partialRef, nextIdRef);
+  const isSettled = content.length > 0 && settledLen === content.length;
+
+  /* Reveal speed is measured in an effect rather than during render, so the
+     render stays a pure function of content and these two state values. */
+  useEffect(() => {
+    const len = content.length;
+    if (len === lastLenRef.current) return;
+
+    if (len < lastLenRef.current) {
+      rateRef.current = 0; /* a new stream reused this component */
+    } else {
+      const delta = len - lastLenRef.current;
+      rateRef.current = rateRef.current * (1 - RATE_SMOOTHING) + delta * RATE_SMOOTHING;
     }
-    lastContentRef.current = '';
-  } else {
-    if (
-      lastContentRef.current &&
-      content.length < lastContentRef.current.length &&
-      !lastContentRef.current.startsWith(content)
-    ) {
-      resetStreamState(stableLenRef, segmentsRef, partialRef, nextIdRef);
-    }
+    lastLenRef.current = len;
 
-    const processed =
-      stableLenRef.current +
-      segmentsRef.current.reduce((n, s) => n + s.text.length, 0) +
-      partialRef.current.length;
+    const next = Math.min(
+      RAMP_MAX,
+      Math.max(RAMP_MIN, Math.round((rateRef.current * RAMP_PER_CHAR) / RAMP_STEP) * RAMP_STEP)
+    );
+    if (next !== rampLen) setRampLen(next);
+  }, [content, rampLen]);
 
-    if (content.length > processed) {
-      partialRef.current += content.slice(processed);
-    }
+  useEffect(() => {
+    if (!content || settledLen === content.length) return;
+    const timer = window.setTimeout(() => setSettledLen(content.length), SETTLE_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [content, settledLen]);
 
-    while (true) {
-      const match = partialRef.current.match(/^\S+\s+/);
-      if (!match) break;
-      segmentsRef.current.push({ id: nextIdRef.current++, text: match[0] });
-      partialRef.current = partialRef.current.slice(match[0].length);
-    }
+  const rampStart = Math.max(0, content.length - rampLen);
+  const stableLen = computeStableLen(content, rampStart);
+  const stable = content.slice(0, stableLen);
+  const settled = content.slice(stableLen, rampStart);
+  const ramp = content.slice(rampStart);
 
-    /* Fold completed paragraphs into the stable markdown zone, so formatting
-       (bold, blockquotes, lists) snaps in at natural pauses rather than
-       mid-sentence. The size cap bounds the span list inside long paragraphs. */
-    const segs = segmentsRef.current;
-    let foldEnd = -1;
-    for (let i = segs.length - 1; i >= 0; i--) {
-      if (segs[i].text.includes('\n\n')) {
-        foldEnd = i;
-        break;
-      }
-    }
-    if (foldEnd === -1) {
-      const segmentChars = segs.reduce((n, s) => n + s.text.length, 0);
-      if (segmentChars > SEGMENT_FOLD_THRESHOLD) foldEnd = segs.length - 1;
-    }
-    if (foldEnd >= 0) {
-      const folded = segs
-        .slice(0, foldEnd + 1)
-        .map((s) => s.text)
-        .join('');
-      stableLenRef.current += folded.length;
-      segmentsRef.current = segs.slice(foldEnd + 1);
-    }
-
-    lastContentRef.current = content;
-  }
-
-  const stable = content.slice(0, stableLenRef.current);
-  const segments = content ? segmentsRef.current : [];
-  const partial = content ? partialRef.current : '';
-
-  /* Memoize the stable markdown so it's only re-parsed when stable content changes,
-     not on every streaming token flush */
+  /* Only re-parse markdown when the stable zone grows, not on every token */
   const stableMarkdown = useMemo(
     () => (stable ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{stable}</ReactMarkdown> : null),
     [stable]
   );
+
+  /* Characters are keyed by absolute index, so each one keeps its DOM node as
+     it slides back through the window: React patches opacity instead of
+     remounting, which is what keeps the edge smooth. */
+  const rampNodes = useMemo(() => {
+    const nodes: ReactNode[] = [];
+    const lastIdx = ramp.length - 1;
+    let offset = 0;
+
+    for (const run of ramp.split(/(\s+)/)) {
+      if (!run) continue;
+      const runStart = offset;
+      const chars: ReactNode[] = [];
+
+      for (const char of Array.from(run)) {
+        const t = lastIdx > 0 ? offset / lastIdx : 0;
+        chars.push(
+          <span
+            key={rampStart + offset}
+            className={styles.streamRampChar}
+            style={{ opacity: isSettled ? 1 : 1 - (1 - RAMP_MIN_OPACITY) * t * t }}
+          >
+            {char}
+          </span>
+        );
+        offset += char.length;
+      }
+
+      if (/\s/.test(run)) {
+        nodes.push(...chars);
+      } else {
+        nodes.push(
+          <span key={`w${rampStart + runStart}`} className={styles.streamRampWord}>
+            {chars}
+          </span>
+        );
+      }
+    }
+
+    return nodes;
+  }, [ramp, rampStart, isSettled]);
 
   return (
     <div className={`${styles.messageRow} ${styles.messageRowAssistant} ${styles.streamingBubble}`}>
@@ -118,12 +147,8 @@ export function StreamingBubble({ content }: Props) {
           {content ? (
             <>
               {stableMarkdown}
-              {segments.map((seg) => (
-                <span key={seg.id} className={styles.streamChunk}>
-                  {seg.text}
-                </span>
-              ))}
-              {partial ? <span className={styles.streamPartial}>{partial}</span> : null}
+              {settled ? <span className={styles.streamSettled}>{settled}</span> : null}
+              {rampNodes}
               <span className={styles.streamCursor} aria-hidden="true" />
             </>
           ) : (

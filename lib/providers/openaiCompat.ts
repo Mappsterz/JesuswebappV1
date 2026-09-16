@@ -20,6 +20,20 @@ const OPENAI_MODELS: string[] = (process.env.OPENAI_MODELS || 'gpt-4o-mini')
   .map((m) => m.trim())
   .filter(Boolean);
 
+/* Reasoning models spend hidden thinking tokens out of the same budget as the
+   visible reply, so an uncapped effort truncates answers mid-sentence — the
+   same failure the Gemini adapter avoids with a zero thinking budget. The
+   parameter is only valid on reasoning models, so it is gated by model id
+   rather than sent blindly. */
+const OPENAI_REASONING_EFFORT = process.env.OPENAI_REASONING_EFFORT || 'low';
+const REASONING_MODEL_PATTERN = /gpt-oss|qwen3|deepseek-r1|^o[1-9]/i;
+
+function reasoningEffortFor(model: string): { reasoning_effort: string } | undefined {
+  if (OPENAI_REASONING_EFFORT === 'off') return undefined;
+  if (!REASONING_MODEL_PATTERN.test(model)) return undefined;
+  return { reasoning_effort: OPENAI_REASONING_EFFORT };
+}
+
 export function isOpenAICompatConfigured(): boolean {
   return Boolean(OPENAI_API_KEY);
 }
@@ -90,6 +104,7 @@ export const openAICompatProvider: ChatProvider = {
               temperature: OPENAI_TEMPERATURE,
               top_p: OPENAI_TOP_P,
               max_tokens: OPENAI_MAX_OUTPUT_TOKENS,
+              ...reasoningEffortFor(modelName),
             }),
           }),
         { maxRetries: 1, baseDelay: 500 }
