@@ -1,17 +1,10 @@
 import type { Metadata } from "next";
-import { Cinzel, Lora } from "next/font/google";
+import { Inter } from "next/font/google";
 import "./globals.css";
 
-const cinzel = Cinzel({
+const inter = Inter({
   subsets: ["latin"],
-  variable: "--font-display",
-  display: "swap",
-});
-
-const lora = Lora({
-  subsets: ["latin"],
-  variable: "--font-body",
-  style: ["normal", "italic"],
+  variable: "--font-inter",
   display: "swap",
 });
 
@@ -38,7 +31,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${cinzel.variable} ${lora.variable}`}>{children}</body>
+      <body className={inter.variable}>{children}</body>
     </html>
   );
 }
