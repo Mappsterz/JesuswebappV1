@@ -1,10 +1,15 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { Conversation, Message } from '@/lib/types';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { withMessageIds, type Conversation, type Message } from '@/lib/types';
 
 const CONVOS_KEY = 'wwm-conversations';
 const ACTIVE_KEY = 'wwm-active-convo-id';
+
+/* Serializing every conversation costs time proportional to total history,
+   so the write is held back from the frame that changed state: a reply
+   committing and the whole thread being stringified must not share a frame. */
+const PERSIST_DELAY_MS = 300;
 
 function createConversation(): Conversation {
   return {
@@ -35,7 +40,9 @@ export function useConversations() {
       savedActiveId = localStorage.getItem(ACTIVE_KEY);
       const savedConvos = localStorage.getItem(CONVOS_KEY);
       convos = savedConvos ? JSON.parse(savedConvos) : [];
-      convos = convos.filter((c) => c.messages.length > 0 || c.id === savedActiveId);
+      convos = convos
+        .filter((c) => c.messages.length > 0 || c.id === savedActiveId)
+        .map((c) => ({ ...c, messages: withMessageIds(c.messages) }));
     } catch (e) {
       console.error('[WWM] Failed to load conversations, starting fresh:', e);
       convos = [];
@@ -56,12 +63,41 @@ export function useConversations() {
   }, []);
   /* eslint-enable react-hooks/set-state-in-effect */
 
-  /* Persist */
-  useEffect(() => {
-    if (conversations.length > 0) {
-      localStorage.setItem(CONVOS_KEY, JSON.stringify(conversations));
+  /* Persist, deferred. The latest snapshot waits in pendingRef and is written
+     once the debounce settles; pagehide and unmount flush it immediately so a
+     quick tab close loses nothing. */
+  const pendingPersistRef = useRef<Conversation[] | null>(null);
+  const persistTimerRef = useRef<number | null>(null);
+
+  const flushPersist = useCallback(() => {
+    if (persistTimerRef.current != null) {
+      window.clearTimeout(persistTimerRef.current);
+      persistTimerRef.current = null;
     }
-  }, [conversations]);
+    const pending = pendingPersistRef.current;
+    if (!pending) return;
+    pendingPersistRef.current = null;
+    try {
+      localStorage.setItem(CONVOS_KEY, JSON.stringify(pending));
+    } catch (e) {
+      console.error('[WWM] Failed to persist conversations:', e);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (conversations.length === 0) return;
+    pendingPersistRef.current = conversations;
+    if (persistTimerRef.current != null) window.clearTimeout(persistTimerRef.current);
+    persistTimerRef.current = window.setTimeout(flushPersist, PERSIST_DELAY_MS);
+  }, [conversations, flushPersist]);
+
+  useEffect(() => {
+    window.addEventListener('pagehide', flushPersist);
+    return () => {
+      window.removeEventListener('pagehide', flushPersist);
+      flushPersist();
+    };
+  }, [flushPersist]);
 
   useEffect(() => {
     if (activeId) localStorage.setItem(ACTIVE_KEY, activeId);
@@ -194,9 +230,9 @@ export function useConversations() {
     try {
       const parsed = JSON.parse(json);
       if (!Array.isArray(parsed)) return false;
-      const valid: Conversation[] = parsed.filter(
-        (c) => c && typeof c.id === 'string' && Array.isArray(c.messages)
-      );
+      const valid: Conversation[] = parsed
+        .filter((c) => c && typeof c.id === 'string' && Array.isArray(c.messages))
+        .map((c) => ({ ...c, messages: withMessageIds(c.messages) }));
       if (valid.length === 0) return false;
       setConversations((prev) => {
         const existingIds = new Set(prev.map((c) => c.id));

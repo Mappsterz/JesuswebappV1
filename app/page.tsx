@@ -53,10 +53,15 @@ export default function Home() {
   const isNearBottomRef = useRef(true);
   const showScrollBtnRef = useRef(false);
 
-  /* Track how many messages at the END of the list are "new" (should animate).
-     Messages loaded from localStorage or conversation switching get 0. */
-  const newMessageCountRef = useRef(0);
-  const prevMessageLenRef = useRef(0);
+  /* The conversation whose newest user message should play its entrance.
+     Set on send and compared against activeId at render, so switching
+     conversations or restoring from storage never animates, with no effect
+     needed to clear it. Assistant replies never animate here: they already
+     arrive through StreamingBubble and would otherwise spring a second time
+     on commit. Real state, not a ref, so the flag is current on the render
+     that mounts the new bubble. */
+  const [animateSendIn, setAnimateSendIn] = useState<string | null>(null);
+  const animateLastUser = animateSendIn !== null && animateSendIn === activeId;
 
   const focusInput = useCallback(() => {
     inputRef.current?.focus();
@@ -87,45 +92,33 @@ export default function Home() {
   const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
     const el = chatAreaRef.current;
     if (!el) return;
+    isNearBottomRef.current = true;
     if (behavior === 'auto') el.scrollTop = el.scrollHeight;
     else messagesEndRef.current?.scrollIntoView({ behavior });
   }, []);
 
+  /* Opening or switching a conversation lands on its latest message. */
   useEffect(() => {
-    if (messages.length > 0 || streamingContent) {
-      if (!isNearBottomRef.current) return;
-      /* While streaming (and motion is allowed), the glide loop below owns
-         the scroll — eased following reads as breathing, not twitching. */
-      if (isStreaming && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-      scrollToBottom('auto');
-    }
-  }, [messages, streamingContent, isStreaming, scrollToBottom]);
+    scrollToBottom('auto');
+  }, [activeId, scrollToBottom]);
 
-  /* Eased scroll-follow during streaming: each frame, close a fraction of
-     the distance to the bottom instead of teleporting. Pauses automatically
-     when the reader scrolls up (isNearBottomRef goes false). */
+  /* Follow the bottom as content grows. A ResizeObserver on the message list
+     fires only when its height actually changes — a wrapped line, a committed
+     message — rather than on every animation frame, and it runs after layout,
+     so reading scrollHeight here forces no extra reflow. CSS scroll anchoring
+     would do this natively in Chromium, but Safari has none, so the observer
+     is the portable path. Following pauses by itself once the reader scrolls
+     up, because the scroll listener below flips isNearBottomRef to false. */
   useEffect(() => {
-    if (!isStreaming) return;
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     const el = chatAreaRef.current;
-    if (!el) return;
-
-    let rafId: number;
-    const glide = () => {
-      if (isNearBottomRef.current) {
-        const targetTop = el.scrollHeight - el.clientHeight;
-        const dist = targetTop - el.scrollTop;
-        if (dist > 1) {
-          el.scrollTop += Math.max(1, dist * 0.18);
-        } else if (dist > 0) {
-          el.scrollTop = targetTop;
-        }
-      }
-      rafId = requestAnimationFrame(glide);
-    };
-    rafId = requestAnimationFrame(glide);
-    return () => cancelAnimationFrame(rafId);
-  }, [isStreaming]);
+    const list = el?.firstElementChild;
+    if (!el || !list) return;
+    const observer = new ResizeObserver(() => {
+      if (isNearBottomRef.current) el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [activeId]);
 
   useEffect(() => {
     const el = chatAreaRef.current;
@@ -155,26 +148,34 @@ export default function Home() {
     focusInput();
   }, [focusInput]);
 
-  /* ── Actions ── */
+  /* ── Actions ──
+     Sending is an explicit request to see the reply, so it resumes following
+     even when the reader had scrolled up; the observer then tracks the new
+     message and the stream as they land. */
   const handleSend = useCallback(() => {
     const text = input;
     setInput('');
     if (inputRef.current) inputRef.current.style.height = 'auto';
+    isNearBottomRef.current = true;
+    setAnimateSendIn(activeId);
     sendMessage(text, messages);
-  }, [input, messages, sendMessage]);
+  }, [input, messages, sendMessage, activeId]);
 
   const handleSuggestion = useCallback(
     (text: string) => {
+      isNearBottomRef.current = true;
+      setAnimateSendIn(activeId);
       if (text === 'Daily devotional') {
         sendMessage(buildDevotionalPrompt(getDailyPassage()), messages);
         return;
       }
       sendMessage(text, messages);
     },
-    [messages, sendMessage]
+    [messages, sendMessage, activeId]
   );
 
   const handleRegenerate = useCallback(() => {
+    isNearBottomRef.current = true;
     regenerate(messages);
   }, [messages, regenerate]);
 
@@ -203,20 +204,6 @@ export default function Home() {
   );
 
   const showWelcome = messages.length === 0;
-
-  /* Track which messages are newly added (for entrance animation) */
-  useEffect(() => {
-    const prevLen = prevMessageLenRef.current;
-    const curLen = messages.length;
-    if (curLen > prevLen && prevLen > 0) {
-      // Messages were appended — the new ones should animate
-      newMessageCountRef.current = curLen - prevLen;
-    } else if (curLen <= prevLen || prevLen === 0) {
-      // Conversation switched, cleared, or initial load — no animations
-      newMessageCountRef.current = 0;
-    }
-    prevMessageLenRef.current = curLen;
-  }, [messages]);
 
   return (
     <div className={`${styles.pageContainer} ${isSidebarOpen ? styles.sidebarOpen : ''}`}>
@@ -325,7 +312,7 @@ export default function Home() {
               isStreaming={isStreaming}
               streamingContent={streamingContent}
               onRegenerate={handleRegenerate}
-              newMessageCount={newMessageCountRef.current}
+              animateLastUser={animateLastUser}
             />
           </div>
         </main>

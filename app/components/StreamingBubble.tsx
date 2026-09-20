@@ -5,6 +5,9 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import styles from '../page.module.css';
 
+/* Stable identity — see MessageBubble */
+const REMARK_PLUGINS = [remarkGfm];
+
 /* Inside a single paragraph, fold plain text into the markdown zone once it
    exceeds this size, so raw syntax never lingers in a very long paragraph.
    Folding normally happens earlier, at paragraph boundaries. */
@@ -90,7 +93,7 @@ export function StreamingBubble({ content }: Props) {
 
   /* Only re-parse markdown when the stable zone grows, not on every token */
   const stableMarkdown = useMemo(
-    () => (stable ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{stable}</ReactMarkdown> : null),
+    () => (stable ? <ReactMarkdown remarkPlugins={REMARK_PLUGINS}>{stable}</ReactMarkdown> : null),
     [stable]
   );
 

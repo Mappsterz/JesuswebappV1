@@ -1,8 +1,7 @@
 'use client';
 
 import { useCallback, useRef, useState } from 'react';
-import { flushSync } from 'react-dom';
-import type { Message } from '@/lib/types';
+import { createMessage, type Message } from '@/lib/types';
 
 const CONNECTION_ERROR =
   'Unable to connect right now. If you\'re running locally, make sure Ollama is running (`ollama serve`). Please try again in a moment.';
@@ -140,13 +139,17 @@ export function useChatStream({ activeId, ensureActiveId, updateMessagesFor, tit
     drainResolveRef.current = null;
   }, [revealTarget, scheduleFlush]);
 
+  /* Deliberately not flushSync. The commit and the teardown in runStream's
+     finally block run in the same synchronous continuation, so React batches
+     them into one render: the finished bubble mounts in the same frame the
+     streaming bubble unmounts. Forcing the commit early produced a frame with
+     both bubbles present and two layouts back to back — the end-of-reply
+     hitch. */
   const commitAssistant = useCallback(
     (content: string, convoId: string) => {
       const trimmed = content.trim();
       if (!trimmed) return;
-      flushSync(() => {
-        updateMessagesFor(convoId, (prev) => [...prev, { role: 'assistant', content }]);
-      });
+      updateMessagesFor(convoId, (prev) => [...prev, createMessage('assistant', content)]);
     },
     [updateMessagesFor]
   );
@@ -171,7 +174,10 @@ export function useChatStream({ activeId, ensureActiveId, updateMessagesFor, tit
         const response = await fetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messages: messagesToSend }),
+          /* Client-side ids stay client-side */
+          body: JSON.stringify({
+            messages: messagesToSend.map(({ role, content }) => ({ role, content })),
+          }),
           signal: controller.signal,
         });
 
@@ -267,7 +273,7 @@ export function useChatStream({ activeId, ensureActiveId, updateMessagesFor, tit
         console.warn('[WWM] send arrived before conversations initialized — created one on the fly');
       }
 
-      const userMessage: Message = { role: 'user', content: trimmed };
+      const userMessage = createMessage('user', trimmed);
       titleFromFirstMessage(convoId, trimmed);
       updateMessagesFor(convoId, (prev) => [...prev, userMessage]);
 

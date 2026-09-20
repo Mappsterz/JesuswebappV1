@@ -516,6 +516,10 @@
   /* Removed will-change: scroll-position and translateZ(0) — modern browsers
      auto-promote scrollable containers. Forced promotion can cause text
      rendering artifacts and wastes GPU memory. */
+  /* Following the bottom is handled in JS (a ResizeObserver on the list), so
+     the browser's own scroll anchoring is switched off here: two mechanisms
+     adjusting scrollTop for the same growth can visibly fight. */
+  overflow-anchor: none;
 }
 
 .messageList {
@@ -531,9 +535,13 @@
    =================================================== */
 .messageRow {
   display: flex;
-  /* No entrance animation by default — historical messages render instantly */
-  content-visibility: auto;
-  contain-intrinsic-size: auto 120px;
+  /* No entrance animation by default — historical messages render instantly.
+     Layout containment lets the engine skip finished rows when the streaming
+     row below them grows. content-visibility: auto was tried here and
+     removed: its 120px placeholder was several times shorter than a real
+     reply, so off-screen rows snapped to true height as they scrolled back
+     into view and jolted the scroll position with every turn. */
+  contain: layout style;
 }
 
 /* Only freshly sent/received messages get entrance animation */
@@ -721,9 +729,12 @@
   border-color: var(--border-light);
 }
 
-/* Streaming bubble (override messageRow slideUp — runs once on appear) */
+/* Streaming bubble: opacity-only entrance. springUp was tried here, but its
+   translate ran while the first words were already growing the bubble, so
+   later replies read as shoving the stack above them. A fade touches no
+   layout, so the row's height is only ever driven by its text. */
 .streamingBubble.messageRow {
-  animation: springUp 0.5s var(--ease-spring-soft) both;
+  animation: fadeIn 0.25s ease-out both;
 }
 
 /* Streamed text reveals as a gradient in space rather than an animation per
@@ -734,9 +745,12 @@
   display: inline;
 }
 
+/* No transition on the ramp: opacity is already re-derived on every reveal
+   tick, so the steps are sub-perceptual, and a transition here spawned a
+   fresh compositor animation per character per tick — over a thousand in a
+   single reply when measured. */
 .streamRampChar {
   display: inline;
-  transition: opacity 120ms linear;
 }
 
 /* Element boundaries shouldn't introduce line-break opportunities, but keeping
@@ -750,7 +764,6 @@
 @media (prefers-reduced-motion: reduce) {
   .streamRampChar {
     opacity: 1 !important;
-    transition: none !important;
   }
 }
 
