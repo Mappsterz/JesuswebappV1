@@ -247,6 +247,7 @@
 }
 
 .headerRight {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -342,7 +343,6 @@
    greeting, icon — the screen clears in sequence, not as one rigid block.
    A resting transition on these elements keeps the return smooth too. The
    icon animates opacity ONLY so it never fights its infinite float transform. */
-.welcomeLayer .welcomeGreeting,
 .welcomeLayer .welcomeSubtitle,
 .welcomeLayer .suggestionChips {
   transition:
@@ -360,12 +360,6 @@
   opacity: 0;
   transform: translateY(-10px);
   transition-delay: 0.05s;
-}
-
-.welcomeLayer.viewHidden .welcomeGreeting {
-  opacity: 0;
-  transform: translateY(-10px);
-  transition-delay: 0.1s;
 }
 
 .welcomeLayer.viewHidden .welcomeIcon {
@@ -414,34 +408,86 @@
     float 5s ease-in-out 0.6s infinite;
 }
 
-.welcomeGreeting {
-  font-family: var(--font-display);
-  font-size: var(--text-4xl);
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: var(--space-3);
+.welcomeSubtitle {
+  font-family: var(--font-body);
+  font-size: var(--text-2xl);
+  font-weight: 400;
   letter-spacing: 0;
+  color: var(--text-primary);
+  margin-bottom: var(--space-8);
   animation: springUp 0.7s var(--ease-spring-soft);
   animation-fill-mode: backwards;
   animation-delay: 0.15s;
-  background: linear-gradient(
-    135deg,
-    var(--text-primary),
-    var(--accent-gold-light)
-  );
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
 }
 
-.welcomeSubtitle {
+.communityMenu {
+  display: flex;
+}
+
+/* The header's backdrop-filter makes it the backdrop root, so a blur here
+   could only sample the header; a near-opaque fill keeps page content from
+   showing through. */
+.communityCard {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  width: 18rem;
+  max-width: calc(100vw - 2 * var(--space-4));
+  padding: var(--space-4);
+  border-radius: var(--radius-xl);
+  background: color-mix(in srgb, var(--bg-secondary) 96%, transparent);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-highlight), var(--glass-shadow);
+  text-align: left;
+  transform-origin: top right;
+  animation: scaleIn 0.18s var(--ease-spring-soft);
+}
+
+.communityTitle {
+  font-family: var(--font-display);
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--accent-gold-light);
+  margin-bottom: var(--space-1);
+}
+
+.communityText {
   font-family: var(--font-body);
-  font-size: var(--text-lg);
+  font-size: var(--text-sm);
   color: var(--text-secondary);
-  margin-bottom: var(--space-12);
-  animation: springUp 0.7s var(--ease-spring-soft);
-  animation-fill-mode: backwards;
-  animation-delay: 0.3s;
+  margin-bottom: var(--space-4);
+}
+
+.communityActions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.communityAction {
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-full);
+  background: transparent;
+  border: 1px solid var(--accent-gold-border);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    transform var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.communityAction:hover {
+  border-color: var(--accent-gold);
+  color: var(--accent-gold-light);
+  transform: translateY(-1px);
+}
+
+.communityAction:active {
+  transform: translateY(0);
 }
 
 .suggestionChips {
@@ -1187,12 +1233,8 @@
     letter-spacing: 0.01em;
   }
 
-  .welcomeGreeting {
-    font-size: var(--text-2xl);
-  }
-
   .welcomeSubtitle {
-    font-size: var(--text-base);
+    font-size: var(--text-xl);
   }
 
   .welcomeIcon {
@@ -1232,10 +1274,6 @@
 
 /* — Tablet (481px – 768px) — */
 @media (min-width: 481px) and (max-width: 768px) {
-  .welcomeGreeting {
-    font-size: var(--text-3xl);
-  }
-
   .messageBubble {
     max-width: 85%;
   }

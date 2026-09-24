@@ -15,7 +15,8 @@ import { ChatInput } from './components/ChatInput';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { OnboardingModal } from './components/OnboardingModal';
 import { BiblePanel } from './components/BiblePanel';
-import { CrossIcon, SunIcon, MoonIcon, ArrowDownIcon, MenuIcon, BookIcon } from './components/icons';
+import { CommunityCard } from './components/CommunityCard';
+import { CrossIcon, SunIcon, MoonIcon, ArrowDownIcon, SidebarIcon, BookIcon, PeopleIcon } from './components/icons';
 
 const ONBOARDED_KEY = 'wwm-onboarded';
 
@@ -43,6 +44,7 @@ export default function Home() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [isBibleOpen, setIsBibleOpen] = useState(false);
+  const [isCommunityOpen, setIsCommunityOpen] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
@@ -50,6 +52,7 @@ export default function Home() {
   const chatAreaRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const communityRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
   const showScrollBtnRef = useRef(false);
 
@@ -74,6 +77,22 @@ export default function Home() {
     titleFromFirstMessage,
     onSettled: focusInput,
   });
+
+  useEffect(() => {
+    if (!isCommunityOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (!communityRef.current?.contains(e.target as Node)) setIsCommunityOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsCommunityOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [isCommunityOpen]);
 
   /* ── Onboarding (first visit) ── */
   useEffect(() => {
@@ -251,7 +270,7 @@ export default function Home() {
                 title="Toggle history"
                 aria-label="Toggle chat history"
               >
-                <MenuIcon size={20} />
+                <SidebarIcon size={20} />
               </button>
               <button
                 className={styles.brand}
@@ -277,9 +296,33 @@ export default function Home() {
                   <span className={styles.healthDotInner} data-status="error" />
                 </span>
               )}
+              <div className={styles.communityMenu} ref={communityRef}>
+                <button
+                  className={styles.themeToggle}
+                  onClick={() => setIsCommunityOpen((prev) => !prev)}
+                  aria-label="Walk with others"
+                  title="Walk with others"
+                  aria-expanded={isCommunityOpen}
+                  aria-controls="community-menu"
+                >
+                  <PeopleIcon size={18} />
+                </button>
+                {isCommunityOpen && (
+                  <CommunityCard
+                    id="community-menu"
+                    onSuggestion={(text) => {
+                      setIsCommunityOpen(false);
+                      handleSuggestion(text);
+                    }}
+                  />
+                )}
+              </div>
               <button
                 className={styles.themeToggle}
-                onClick={() => setIsBibleOpen(true)}
+                onClick={() => {
+                  setIsCommunityOpen(false);
+                  setIsBibleOpen(true);
+                }}
                 aria-label="Open Scripture lookup"
                 title="Scripture lookup"
               >
@@ -287,7 +330,10 @@ export default function Home() {
               </button>
               <button
                 className={styles.themeToggle}
-                onClick={toggleTheme}
+                onClick={() => {
+                  setIsCommunityOpen(false);
+                  toggleTheme();
+                }}
                 aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
                 title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
               >

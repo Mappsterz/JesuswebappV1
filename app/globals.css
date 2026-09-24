@@ -35,8 +35,8 @@
   --success: #22c55e;
 
   /* — Typography — */
-  --font-display: var(--font-inter), system-ui, sans-serif;
-  --font-body: var(--font-inter), system-ui, sans-serif;
+  --font-display: "Times New Roman", Times, serif;
+  --font-body: "Times New Roman", Times, serif;
   --font-mono: 'SF Mono', 'Fira Code', monospace;
 
   /* — Frosted glass — */
@@ -219,7 +219,7 @@ html {
 body {
   font-family: var(--font-body);
   font-size: var(--text-base);
-  line-height: 1.55;
+  line-height: 1.65;
   color: var(--text-primary);
   background-color: var(--bg-primary);
   height: 100%;
